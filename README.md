@@ -89,11 +89,6 @@ The `old_files` folder contains earlier versions of the project:
 - `WordFinder_1mode_old.py`
 - `WordFinder_2modes_old.py`
 
-The `exe_to_run` folder contains build artifacts for the packaged executable:
-
-- `build`
-- `dist`
-
 ## Notes
 
 - The app is designed to work with plain text word lists.
