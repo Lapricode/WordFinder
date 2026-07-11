@@ -6,6 +6,7 @@ from collections import Counter
 import subprocess
 from itertools import product
 
+
 # ══════════════════════════════════════════════════════════════════
 #  Core filtering logic
 # ══════════════════════════════════════════════════════════════════
@@ -526,7 +527,7 @@ WIDTH, HEIGHT = 1400, 700
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 clock = pygame.time.Clock()
 
-FONT_FAMILY = "DejaVu Sans,Noto Sans,Liberation Sans,sans-serif,Book,Regular,segoeui,dejavusans,notosans,arial,liberationsans"
+FONT_FAMILY = "sans-serif, DejaVu Sans, Noto Sans, Liberation Sans, Book, Regular, segoeui, dejavusans, notosans, arial, liberationsans"
 
 FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
 FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)

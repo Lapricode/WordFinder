@@ -2,6 +2,9 @@
 
 Word Finder is a desktop word-filtering app for solving word games and experimenting with custom dictionary lists. It includes two search modes, supports **Greek** and **English** word lists, and can save filtered results to a text file.
 
+![greek_words_pattern_hunt_example](images/greek_words_pattern_hunt_example.png)
+![english_words_letter_match_example](images/english_words_letter_match_example.png)
+
 ## Features
 
 - **Letter Match** mode for slot-based filtering
