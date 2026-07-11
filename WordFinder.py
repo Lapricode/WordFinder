@@ -495,6 +495,30 @@ def resource_path(relative_path):
 #  Pygame + fonts
 # ══════════════════════════════════════════════════════════════════
 
+use_ascii = False
+if use_ascii:
+    special_caracters = {
+        "-": "-",
+        "^": "^",
+        "v": "v",
+        "<": "<",
+        ">": ">",
+        "*": "*",
+        "~": "~",
+        "[OK]": "[OK]",
+    }
+else:
+    special_caracters = {
+        "-": "—",
+        "^": "↑",
+        "v": "↓",
+        "<": "←",
+        ">": "→",
+        "*": "•",
+        "~": "≈",
+        "[OK]": "✓",
+    }
+
 pygame.init()
 pygame.display.set_caption("Word Finder")
 
@@ -502,12 +526,14 @@ WIDTH, HEIGHT = 1400, 700
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 clock = pygame.time.Clock()
 
-FONT_DEFAULT = pygame.font.SysFont("segoeui", 17)
-FONT_SM = pygame.font.SysFont("segoeui", 14)
-FONT_MD = pygame.font.SysFont("segoeui", 18, bold=True)
-FONT_LG = pygame.font.SysFont("segoeui", 26, bold=True)
-FONT_XL = pygame.font.SysFont("segoeui", 32, bold=True)
-LINK_FONT_SM = pygame.font.SysFont("segoeui", 14)
+FONT_FAMILY = "DejaVu Sans,Noto Sans,Liberation Sans,sans-serif,Book,Regular,segoeui,dejavusans,notosans,arial,liberationsans"
+
+FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
+FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)
+FONT_MD = pygame.font.SysFont(FONT_FAMILY, 18, bold=True)
+FONT_LG = pygame.font.SysFont(FONT_FAMILY, 26, bold=True)
+FONT_XL = pygame.font.SysFont(FONT_FAMILY, 32, bold=True)
+LINK_FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)
 LINK_FONT_SM.set_underline(True)
 
 # ─── Colour palette ───────────────────────────────────────────────
@@ -614,7 +640,7 @@ DARK_THEME = {
 
 # ─── Layout constants ─────────────────────────────────────────────
 MAX_WORD_LENGTH = 35
-MAX_MAX_PREVIEW = 50
+MAX_MAX_PREVIEW = 100
 PAD = 20
 GAP = 20
 
@@ -688,6 +714,10 @@ def draw_panel(surface, rect, color=None, border_color=None, radius=12):
     pygame.draw.rect(surface, b, rect, 1, border_radius=radius)
 
 
+def lighten(color, amount=35):
+    return tuple(min(255, c + amount) for c in color[:3])
+
+
 def draw_button(
     surface, rect, label, bg=None, fg=None, radius=8, hovered=False, font=None
 ):
@@ -697,9 +727,25 @@ def draw_button(
     draw_rect = (
         rect.inflate(int(rect.width * 0.1), int(rect.height * 0.1)) if hovered else rect
     )
-    pygame.draw.rect(surface, bg, draw_rect, border_radius=radius)
+    fill = lighten(bg) if hovered else bg
+    pygame.draw.rect(surface, fill, draw_rect, border_radius=radius)
     img = font.render(label, True, fg)
     surface.blit(img, img.get_rect(center=draw_rect.center))
+
+
+def draw_nav_button(surface, rect, direction="left", color=None, hovered=False, enabled=True):
+    """Small triangular prev/next navigation button."""
+    base = color if color is not None else ACCENT
+    fg = lighten(base) if (hovered and enabled) else (base if enabled else BORDER)
+    pygame.draw.rect(surface, PANEL2, rect, border_radius=6)
+    pygame.draw.rect(surface, fg, rect, 2, border_radius=6)
+    cx, cy = rect.center
+    s = min(rect.width, rect.height) * 0.28
+    if direction == "left":
+        points = [(cx + s * 0.6, cy - s), (cx + s * 0.6, cy + s), (cx - s * 0.7, cy)]
+    else:
+        points = [(cx - s * 0.6, cy - s), (cx - s * 0.6, cy + s), (cx + s * 0.7, cy)]
+    pygame.draw.polygon(surface, fg, points)
 
 
 def draw_pill_toggle(
@@ -822,10 +868,284 @@ def _make_pattern_slot():
     return {"seq": "", "expanded": False}
 
 
+class InfoModal:
+    """Full-screen dimmed overlay showing the instructions. Click outside or press Escape to close."""
+
+    CONTENT = [
+        (f"Word Finder {special_caracters["-"]} Instructions", "title"),
+        ("", "gap"),
+
+        ("Two Modes", "heading"),
+        ("The program has two search modes, switchable via the red button at the left "
+         "of the controls bar, or by pressing Tab:", "body"),
+        (f"Letter Match {special_caracters["-"]} classic slot-based filtering", "bullet"),
+        (f"Pattern Hunt {special_caracters["-"]} grid-based pattern filtering", "bullet"),
+        ("", "gap"),
+
+        ("Letter Match", "heading"),
+        ("Filters words by applying per-slot letter rules.", "body"),
+        (f"Three input modes (cycle with {special_caracters["^"]} {special_caracters["v"]} or click the pill toggle):", "body"),
+        (f"Valid {special_caracters["-"]} the selected letter group must appear in that slot.", "bullet"),
+        (f"Invalid {special_caracters["-"]} the selected letter group must not appear in that slot.", "bullet"),
+        (f"Exist {special_caracters["-"]} the letter must appear somewhere in the word. Repeating a letter in "
+         "Exist means it must occur multiple times.", "bullet"),
+        ("", "gap"),
+        ("Navigation:", "body"),
+        (f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between slots (Valid/Invalid) or between Exist items.", "bullet"),
+        ("Backspace: in Valid/Invalid, clears the selected slot (or all slots if scope "
+         "is \"All\"). In Exist, deletes the currently selected Exist letter group.", "bullet"),
+        ("Type a letter: adds/removes constraint in current mode.", "bullet"),
+        ("The active slot / exist area shows a highlighted border.", "bullet"),
+        ("", "gap"),
+        ("Slot / All scope (Shift+Space or pill toggle):", "body"),
+        (f"Slot {special_caracters["-"]} input affects only the selected slot.", "bullet"),
+        (f"All {special_caracters["-"]} input affects all slots at once.", "bullet"),
+        ("", "gap"),
+        ("When word length increases, previously entered slot data is preserved. Data "
+         "is only removed when the word length shrinks past its position.", "body"),
+        ("Summary panel shows all current Letter Match constraints.", "body"),
+        ("", "gap"),
+
+        ("Pattern Hunt", "heading"),
+        ("Filters words by a 3x3 grid: rows are Start / Middle / End and columns are "
+         "Valid / Invalid / Exist.", "body"),
+        ("", "gap"),
+        ("Navigation:", "body"),
+        (f"{special_caracters["^"]} {special_caracters["v"]} arrows: move between Start / Middle / End rows.", "bullet"),
+        (f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between the slots of a certain cell group.", "bullet"),
+        (f"Shift + {special_caracters["<"]} {special_caracters[">"]} arrows: move between Valid / Invalid / Exist columns.", "bullet"),
+        ("Click a slot to select it along with its cell group.", "bullet"),
+        ("Backspace deletes the current slot content; if the slot becomes empty, its "
+         "expand flag is also cleared.", "bullet"),
+        ("", "gap"),
+        ("Cell behavior:", "body"),
+        (f"Valid {special_caracters["-"]} at least one pattern in the cell must match.", "bullet"),
+        (f"Invalid {special_caracters["-"]} no pattern in the cell may match.", "bullet"),
+        (f"Exist {special_caracters["-"]} every pattern in the cell must appear in the word.", "bullet"),
+        ("", "gap"),
+        ("Pattern matching rows:", "body"),
+        (f"Start {special_caracters["-"]} sequence must match the beginning of the word.", "bullet"),
+        (f"Middle {special_caracters["-"]} sequence must appear anywhere in the word.", "bullet"),
+        (f"End {special_caracters["-"]} sequence must match the end of the word.", "bullet"),
+        ("", "gap"),
+        ("Expanded matching (Ctrl+Space or the small corner button): Normal mode keeps "
+         "the typed sequence literal. Expanded mode shows and matches all accent/case "
+         "variants.", "body"),
+        ("The left/right and up/down arrows move between the grid cells, while the "
+         "selected cell keeps its own slot index.", "body"),
+        ("", "gap"),
+        ("Word length in Pattern Hunt: Drag the slider all the way left to set \"Word "
+         "Length: All\", which disables length filtering. The slider's left edge is "
+         "visually marked in red.", "body"),
+        ("", "gap"),
+        ("\"Patterns Review\" shows a summary of all current Pattern Hunt rules.", "body"),
+        ("", "gap"),
+
+        ("Common Controls", "heading"),
+        (f"Enter / Search button {special_caracters["-"]} run the search.", "bullet"),
+        (f"Ctrl+S {special_caracters["-"]} save current results to file.", "bullet"),
+        (f"Page Up / Page Down {special_caracters["-"]} scroll through result pages.", "bullet"),
+        (f"Tab {special_caracters["-"]} toggle between Letter Match and Pattern Hunt.", "bullet"),
+        (f"Shift+Space {special_caracters["-"]} toggle Slot and All.", "bullet"),
+        (f"/ (slash) {special_caracters["-"]} switch between Greek and English word lists.", "bullet"),
+        (f"Ctrl+Space {special_caracters["-"]} expand / collapse Pattern Hunt slot(s).", "bullet"),
+        (f"Ctrl+I or the circular i button {special_caracters["-"]} open this instructions window.", "bullet"),
+        ("", "gap"),
+
+        ("Results panel:", "heading"),
+        (f"Left-click a word {special_caracters["-"]} mark it as \"to save\" (green).", "bullet"),
+        (f"Right-click a word {special_caracters["-"]} mark it as \"excluded\" (red).", "bullet"),
+        ("Click again to deselect.", "bullet"),
+        ("The count of marked/excluded words is shown in the results header.", "bullet"),
+        ("Save writes all results (or only marked ones if any are marked).", "bullet"),
+        ("", "gap"),
+
+        ("Theme:", "heading"),
+        ("The theme button shows \"Light\" when the light theme is active, and \"Dark\" "
+         "when the dark theme is active. Click to toggle.", "body"),
+        ("", "gap"),
+
+        ("Language behavior:", "heading"),
+        ("Greek mode understands accented forms and common letter variants. English "
+         "mode groups uppercase and lowercase of the same letter.", "body"),
+        ("", "gap"),
+
+        ("Press  Escape  or click anywhere to close.", "footer"),
+    ]
+
+    def __init__(self):
+        self.visible = False
+        self._scroll = 0
+        self._dragging_sb = False
+        self._drag_offset = 0
+
+    def show(self):
+        self.visible = True
+        self._scroll = 0
+
+    def hide(self):
+        self.visible = False
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return
+            if event.key == pygame.K_i and (event.mod & pygame.KMOD_CTRL):
+                self.hide()
+                return
+
+        panel = self._panel_rect(W, H)
+        track, thumb = self._scrollbar_rects(panel)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if thumb and thumb.collidepoint(event.pos):
+                self._dragging_sb = True
+                self._drag_offset = event.pos[1] - thumb.y
+            elif not panel.collidepoint(event.pos):
+                self.hide()
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_sb and track:
+            max_scroll = self._max_scroll
+            new_y = event.pos[1] - self._drag_offset
+            max_thumb_y = track.y + track.height - thumb.height
+            ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+            self._scroll = max(0, min(max_scroll, ratio * max_scroll))
+
+        if event.type == pygame.MOUSEWHEEL:
+            if panel.collidepoint(pygame.mouse.get_pos()):
+                self._scroll = max(0, min(self._max_scroll, self._scroll - event.y * 20))
+
+    def _panel_rect(self, W, H):
+        pw = min(720, W - 80)
+        ph = min(640, H - 60)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _content_height(self, panel):
+        """Recompute the full wrapped content height for the current panel width."""
+        PAD_ = 28
+        max_w = panel.width - PAD_ * 2
+        line_spacing = {
+            "title":   (FONT_XL, 14),
+            "heading": (FONT_LG, 6),
+            "body":    (FONT_SM, 4),
+            "bullet":  (FONT_SM, 4),
+            "footer":  (FONT_SM, 4),
+            "gap":     (None,    10),
+        }
+        h = 0
+        for text, kind in self.CONTENT:
+            font, extra_gap = line_spacing.get(kind, line_spacing["body"])
+            if font is None:
+                h += extra_gap
+                continue
+            indent = 18 if kind == "bullet" else 0
+            prefix = f"{special_caracters["*"]}  " if kind == "bullet" else ""
+            for _ in self._wrap(prefix + text, font, max_w - indent):
+                h += font.get_height() + extra_gap
+        return h
+
+    @property
+    def _max_scroll(self):
+        # cached each frame in draw(); default 0 before first draw
+        return getattr(self, "_max_scroll_cache", 0)
+
+    def _scrollbar_rects(self, panel):
+        PAD_ = 28
+        visible_h = panel.height - PAD_ * 2
+        total_h = self._content_height(panel)
+        self._max_scroll_cache = max(0, total_h - visible_h)
+        if total_h <= visible_h:
+            return None, None
+        track = pygame.Rect(panel.right - 16, panel.y + 12, 6, panel.height - 24)
+        ratio = visible_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * self._scroll / max(1, self._max_scroll_cache)
+        )
+        thumb = pygame.Rect(track.x, thumb_y, 6, thumb_h)
+        return track, thumb
+
+    def draw(self, surface, W, H):
+        if not self.visible:
+            return
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+
+        panel = self._panel_rect(W, H)
+        pygame.draw.rect(surface, PANEL, panel, border_radius=16)
+        pygame.draw.rect(surface, ACCENT, panel, 2, border_radius=16)
+
+        PAD_ = 28
+        content_x = panel.x + PAD_
+        max_w = panel.width - PAD_ * 2
+        y = panel.y + PAD_ - int(self._scroll)
+
+        line_spacing = {
+            "title":   (FONT_XL, TEXT,   14),
+            "heading": (FONT_LG, ACCENT, 6),
+            "body":    (FONT_SM, MUTED,  4),
+            "bullet":  (FONT_SM, TEXT,   4),
+            "footer":  (FONT_SM, MUTED,  4),
+            "gap":     (None,    None,   10),
+        }
+
+        clip_rect = pygame.Rect(panel.x + 2, panel.y + 2, panel.width - 4, panel.height - 4)
+        old_clip = surface.get_clip()
+        surface.set_clip(clip_rect)
+
+        for text, kind in self.CONTENT:
+            font, color, extra_gap = line_spacing.get(kind, line_spacing["body"])
+            if font is None:
+                y += extra_gap
+                continue
+            indent = 18 if kind == "bullet" else 0
+            prefix = f"{special_caracters["*"]}  " if kind == "bullet" else ""
+            for line in self._wrap(prefix + text, font, max_w - indent):
+                if panel.y <= y <= panel.y + panel.height:
+                    surface.blit(font.render(line, True, color), (content_x + indent, y))
+                y += font.get_height() + extra_gap
+
+        surface.set_clip(old_clip)
+
+        # Clamp scroll now that we know the real max (also refreshes _max_scroll_cache)
+        track, thumb = self._scrollbar_rects(panel)
+        self._scroll = max(0, min(self._max_scroll_cache, self._scroll))
+        if track:
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
+
+    @staticmethod
+    def _wrap(text, font, max_w):
+        if not text:
+            return [""]
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            test = (current + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
+
+
 class AppState:
     def __init__(self):
         self.word_length = 5
-        self.max_preview = MAX_MAX_PREVIEW
+        self.max_preview = MAX_MAX_PREVIEW // 2
         self.preview_start = 0
         self.input_scope = "single"
         self.greek_count = 0
@@ -996,112 +1316,6 @@ summary_tk_root = None
 summary_win = None
 summary_text = None
 summary_open = False
-info_tk_root = None
-info_win = None
-info_text = None
-info_open = False
-
-INFO_TEXT = """Word Finder — Instructions
-
-═══════════════ Two Modes ═══════════════
-
-The program has two search modes, switchable via the red button at the left
-of the controls bar, or by pressing Tab:
-
-  • Letter Match — classic slot-based filtering
-  • Pattern Hunt  — grid-based pattern filtering
-
-
-═══════════════ Letter Match ═══════════════
-
-Filters words by applying per-slot letter rules.
-
-Three input modes (cycle with ↑ ↓ or click the pill toggle):
-  • Valid   — the selected letter group must appear in that slot.
-  • Invalid — the selected letter group must not appear in that slot.
-  • Exist   — the letter must appear somewhere in the word.
-              Repeating a letter in Exist means it must occur multiple times.
-
-Navigation:
-  • ← → arrows: move between slots (Valid/Invalid) or between Exist items.
-  • Backspace: in Valid/Invalid, clears the selected slot (or all slots if
-    scope is "All"). In Exist, deletes the currently selected Exist letter group.
-  • Type a letter: adds/removes constraint in current mode.
-  • The active slot / exist area shows a highlighted border.
-
-Slot / All scope (Shift+Space or pill toggle):
-  • Slot — input affects only the selected slot.
-  • All  — input affects all slots at once.
-
-When word length increases, previously entered slot data is preserved.
-Data is only removed when the word length shrinks past its position.
-
-Summary panel shows all current Letter Match constraints.
-
-
-═══════════════ Pattern Hunt ═══════════════
-
-Filters words by a 3×3 grid: rows are Start / Middle / End and columns are
-Valid / Invalid / Exist.
-
-Navigation:
-  • ↑ ↓ arrows: move between Start / Middle / End rows.
-  • ← → arrows: move between the slots of a certain cell group.
-  • Shift + ← → arrows: move between Valid / Invalid / Exist columns.
-  • Click a slot to select it along with its cell group.
-  • Backspace deletes the current slot content; if the slot becomes empty,
-    its expand flag is also cleared.
-
-Cell behavior:
-  • Valid   — at least one pattern in the cell must match.
-  • Invalid — no pattern in the cell may match.
-  • Exist   — every pattern in the cell must appear in the word.
-
-Pattern matching rows:
-  • Start  — sequence must match the beginning of the word.
-  • Middle — sequence must appear anywhere in the word.
-  • End    — sequence must match the end of the word.
-
-Expanded matching (Ctrl+Space or the small corner button):
-  Normal mode keeps the typed sequence literal.
-  Expanded mode shows and matches all accent/case variants.
-
-The left/right and up/down arrows move between the grid cells, while the
-selected cell keeps its own slot index.
-
-Word length in Pattern Hunt:
-  Drag the slider all the way left to set "Word Length: All", which disables
-  length filtering. The slider's left edge is visually marked in red.
-
-"Patterns Review" shows a summary of all current Pattern Hunt rules.
-
-
-═══════════════ Common Controls ═══════════════
-
-  • Enter / Search button — run the search.
-  • Ctrl+S — save current results to file.
-  • Page Up / Page Down — scroll through result pages.
-  • Tab — toggle between Letter Match and Pattern Hunt.
-  • Shift+Space — toggle Slot and All.
-  • / (slash) — switch between Greek and English word lists.
-  • Ctrl+Space — expand / collapse Pattern Hunt slot(s).
-  • Ctrl+I or the circular i button — open this instructions window.
-
-Results panel:
-  • Left-click a word — mark it as "to save" (green).
-  • Right-click a word — mark it as "excluded" (red).
-  • Click again to deselect.
-  • The count of marked/excluded words is shown in the results header.
-  • Save writes all results (or only marked ones if any are marked).
-
-Theme:
-  The theme button shows "Light" when the light theme is active,
-  and "Dark" when the dark theme is active. Click to toggle.
-
-Language behavior:
-  Greek mode understands accented forms and common letter variants.
-  English mode groups uppercase and lowercase of the same letter.
-"""
 
 
 def get_tk_root():
@@ -1130,7 +1344,7 @@ def open_text_file(path):
 
 
 def format_set(s):
-    return " ".join("".join(sorted(x)) for x in s) if s else "—"
+    return " ".join("".join(sorted(x)) for x in s) if s else f"{special_caracters["-"]}"
 
 
 def open_summary_window():
@@ -1190,7 +1404,7 @@ def refresh_summary_window():
                 parts.append(f"{label} (x{count})" if count > 1 else label)
             lines.append("  " + " · ".join(parts))
         else:
-            lines.append("  —")
+            lines.append(f"  {special_caracters["-"]}")
     else:
         # Pattern Hunt
         for row_name in ["start", "middle", "end"]:
@@ -1207,51 +1421,14 @@ def refresh_summary_window():
                         tag = " [expanded]" if exp else ""
                         lines.append(f"    {i+1}: {disp}{tag}")
                     else:
-                        lines.append(f"    {i+1}: —")
+                        lines.append(f"    {i+1}: {special_caracters["-"]}")
             lines.append("")
     summary_text.delete("1.0", END)
     summary_text.insert("1.0", "\n".join(lines))
 
 
-def open_info_window():
-    global info_win, info_text, info_open
-    root = get_tk_root()
-    if info_win is None or not info_win.winfo_exists():
-        info_win = Toplevel(root)
-        info_win.title("Instructions")
-        info_win.geometry("680x760")
-        info_win.protocol("WM_DELETE_WINDOW", close_info_window)
-        info_text = Text(info_win, wrap="word", font=("Segoe UI", 10))
-        info_text.pack(fill="both", expand=True)
-        btn = Button(info_win, text="Close", command=close_info_window)
-        btn.pack(pady=6)
-    else:
-        info_win.deiconify()
-        info_win.lift()
-        info_win.focus_force()
-    info_open = True
-    refresh_info_window()
-
-
-def close_info_window():
-    global info_win, info_text, info_open
-    info_open = False
-    if info_win is not None and info_win.winfo_exists():
-        info_win.destroy()
-    info_win = None
-    info_text = None
-
-
-def refresh_info_window():
-    if not info_open or info_win is None or not info_win.winfo_exists():
-        return
-    info_text.delete("1.0", END)
-    info_text.insert("1.0", INFO_TEXT)
-
-
 def pump_tk_windows():
     global tk_root, summary_win, summary_text, summary_open
-    global info_win, info_text, info_open
     if tk_root is None or not tk_root.winfo_exists():
         return
     try:
@@ -1261,9 +1438,6 @@ def pump_tk_windows():
         summary_win = None
         summary_text = None
         summary_open = False
-        info_win = None
-        info_text = None
-        info_open = False
 
 
 def _tk_root_temp():
@@ -1395,7 +1569,7 @@ def do_search():
         return
     if not words:
         state.search_results = []
-        state.status = f"No words loaded — check: {state.active_file()}"
+        state.status = f"No words loaded {special_caracters["-"]} check: {state.active_file()}"
         return
 
     if state.finder_mode == "letter_match":
@@ -1431,7 +1605,7 @@ def do_save():
         to_save_words = [w for w in state.search_results if w not in excluded]
 
     if not to_save_words:
-        state.status = "Nothing to save — run Search first."
+        state.status = f"Nothing to save {special_caracters["-"]} run Search first."
         return
     path = state.results_file.strip() or save_file_dialog()
     if not path:
@@ -1443,7 +1617,7 @@ def do_save():
                 f.write(w + "\n")
         state.results_file = path
         state.results_count = len(load_words(path))
-        state.status = f"Saved {state.results_count} words → {os.path.basename(path)}"
+        state.status = f"Saved {state.results_count} words {special_caracters[">"]} {os.path.basename(path)}"
     except Exception as e:
         state.status = f"Save error: {e}"
 
@@ -1499,8 +1673,8 @@ def render_header(mouse_pos):
     )
 
     hints1 = (
-        "Backspace = Clear  ·  Enter = Search  ·  (Shift +) ← → = Navigate  ·  ↑ ↓ = Mode"
-        "  ·  Tab = Letter Match/Pattern Hunt  ·  Shift+Space = Slot/All"
+        f"Backspace = Clear  ·  Enter = Search  ·  (Shift +) {special_caracters["<"]} {special_caracters[">"]} = Navigate  ·  {special_caracters["^"]} {special_caracters["v"]} = Mode"
+        f"  ·  Tab = Letter Match/Pattern Hunt  ·  Shift+Space = Slot/All"
     )
     hints2 = (
         " / = Greek/English  ·  Ctrl+Space = Expand (PH)  ·  Ctrl+S = Save"
@@ -1548,16 +1722,10 @@ def render_controls(mouse_pos):
         "Letter Match" if state.finder_mode == "letter_match" else "Pattern Hunt"
     )
     is_hov_finder = finder_btn_rect.collidepoint(mouse_pos)
-    dr = (
-        finder_btn_rect.inflate(
-            int(finder_btn_rect.w * 0.08), int(finder_btn_rect.h * 0.08)
-        )
-        if is_hov_finder
-        else finder_btn_rect
+    draw_button(
+        screen, finder_btn_rect, finder_lbl, RED, WHITE,
+        radius=8, hovered=is_hov_finder, font=FONT_MD,
     )
-    pygame.draw.rect(screen, RED, dr, border_radius=8)
-    img_f = FONT_MD.render(finder_lbl, True, WHITE)
-    screen.blit(img_f, img_f.get_rect(center=dr.center))
 
     # ── Sliders (stacked, right of finder button) ─────────────────
     # Use the global _S1X/_S1W/_S2X/_S2W which are computed from FINDER_BTN_W
@@ -1779,7 +1947,7 @@ def format_exist_letters(counter):
             group = (key,)
         label = "".join(group)
         parts.append(f"{label} (x{count})" if count > 1 else label)
-    return "  ·  ".join(parts) if parts else "—"
+    return "  ·  ".join(parts) if parts else f"{special_caracters["-"]}"
 
 
 def render_workspace_lm(mouse_pos):
@@ -1883,11 +2051,11 @@ def render_workspace_lm(mouse_pos):
             max_text_w = cell.width - 8
             display_letters = fit_text_with_ellipsis(letters, FONT_SM, max_text_w)
             img = FONT_SM.render(
-                display_letters or "—", True, TEXT if letters else MUTED
+                display_letters or f"{special_caracters["-"]}", True, TEXT if letters else MUTED
             )
             screen.blit(img, img.get_rect(center=cell.center))
             if cell.collidepoint(mouse_pos):
-                letters_full = "".join(sorted(sets[i])) or "—"
+                letters_full = "".join(sorted(sets[i])) or f"{special_caracters["-"]}"
                 hover_text = f"{label} slot {i + 1}: {letters_full}"
                 hover_pos = mouse_pos
         table_y += row_h + 6
@@ -1922,7 +2090,7 @@ def render_workspace_lm(mouse_pos):
             else:
                 group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
             label = "".join(group)
-            disp = f"{label}×{count}" if count > 1 else label
+            disp = f"{label}x{count}" if count > 1 else label
             tw_chip = FONT_SM.size(disp)[0] + 16
             chip_rect = pygame.Rect(chip_x, chip_y, tw_chip, chip_h)
             is_sel = state.input_mode == "exist" and ei == state.selected_exist_idx
@@ -1941,7 +2109,7 @@ def render_workspace_lm(mouse_pos):
             if chip_x > exist_rect.right - 40:
                 break
     else:
-        img = FONT_SM.render("—", True, MUTED)
+        img = FONT_SM.render(f"{special_caracters["-"]}", True, MUTED)
         screen.blit(img, img.get_rect(midleft=(PAD + 90, table_y + exist_row_h // 2)))
 
     table_y += exist_row_h + 6
@@ -2087,7 +2255,7 @@ def render_workspace_ph(mouse_pos):
                 disp = (
                     fit_text_with_ellipsis(disp_seq, FONT_SM, slot_w - 10)
                     if seq
-                    else "—"
+                    else f"{special_caracters["-"]}"
                 )
                 img = FONT_SM.render(
                     disp, True, PURPLE if expanded and seq else (TEXT if seq else MUTED)
@@ -2098,7 +2266,7 @@ def render_workspace_ph(mouse_pos):
                 pygame.draw.rect(
                     screen, PURPLE if expanded else BORDER, exp_btn, border_radius=3
                 )
-                e_img = FONT_SM.render("≈", True, WHITE if expanded else MUTED)
+                e_img = FONT_SM.render(f"{special_caracters["~"]}", True, WHITE if expanded else MUTED)
                 screen.blit(e_img, e_img.get_rect(center=exp_btn.center))
 
                 if sr.collidepoint(mouse_pos):
@@ -2135,7 +2303,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     y0 = table_bottom_y + PAD
     h = HEIGHT - y0 - PAD
     if h < 80:
-        return
+        return None, None
 
     panel = pygame.Rect(PAD, y0, WIDTH - 2 * PAD, h)
     draw_panel(screen, panel, PANEL, BORDER, radius=12)
@@ -2154,16 +2322,30 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     n_excl = sum(1 for v in state.word_selections.values() if v == "exclude")
     sel_parts = []
     if n_save:
-        sel_parts.append(f"{n_save} words to save")
+        sel_parts.append(f"{n_save} words to save {special_caracters["[OK]"]}")
     if n_excl:
-        sel_parts.append(f"{n_excl} words excluded")
+        sel_parts.append(f"{n_excl} words excluded X")
     sel_str = "  |  " + "  ·  ".join(sel_parts) if sel_parts else ""
 
     blit_text(screen, state.status, FONT_SM, MUTED, panel.x + PAD, panel.y + 10)
+
     cnt = f"{n} total  ·  showing {start_index} - {end_index}"
-    blit_text(
-        screen, cnt, FONT_SM, ACCENT, panel.right - PAD, panel.y + 10, anchor="topright"
-    )
+    cnt_w = FONT_SM.size(cnt)[0]
+    nav_w, nav_h, nav_gap = 22, 20, 6
+    group_w = nav_w * 2 + nav_gap * 2 + cnt_w
+    group_x = panel.right - PAD - group_w
+    nav_y = panel.y + 8
+
+    prev_rect = pygame.Rect(group_x, nav_y, nav_w, nav_h)
+    cnt_x = prev_rect.right + nav_gap
+    blit_text(screen, cnt, FONT_SM, ACCENT, cnt_x, panel.y + 10, anchor="topleft")
+    next_rect = pygame.Rect(cnt_x + cnt_w + nav_gap, nav_y, nav_w, nav_h)
+
+    can_prev = state.preview_start > 0
+    can_next = n > 0 and (state.preview_start + state.max_preview) < n
+    draw_nav_button(screen, prev_rect, "left", hovered=prev_rect.collidepoint(mouse_pos), enabled=can_prev)
+    draw_nav_button(screen, next_rect, "right", hovered=next_rect.collidepoint(mouse_pos), enabled=can_next)
+
     if sel_str:
         blit_text(
             screen,
@@ -2179,13 +2361,13 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     if not preview:
         blit_text(
             screen,
-            "No results yet — press Enter or click Search.",
+            f"No results yet {special_caracters["-"]} press Enter or click Search.",
             FONT_MD,
             MUTED,
             panel.x + PAD,
             panel.y + 36,
         )
-        return
+        return prev_rect, next_rect
 
     grid_y = panel.y + 34
     cols = max(1, (panel.width - 2 * PAD) // 250)
@@ -2246,6 +2428,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         pygame.draw.rect(screen, ACCENT, tip_rect, 2, border_radius=10)
         screen.blit(zoom_img, zoom_img.get_rect(center=tip_rect.center))
 
+    return prev_rect, next_rect
+
 
 # ══════════════════════════════════════════════════════════════════
 #  Main loop
@@ -2253,6 +2437,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
 if __name__ == "__main__":
     refresh_words_counts()
+    info_modal = InfoModal()
     dragging = None  # None | 'wl' | 'mp'
     running = True
 
@@ -2296,7 +2481,8 @@ if __name__ == "__main__":
         else:
             tby, summary_btn, _ph_slot_rects = render_workspace_ph(mouse_pos)
 
-        render_results(tby, mouse_pos)
+        page_prev_rect, page_next_rect = render_results(tby, mouse_pos)
+        info_modal.draw(screen, WIDTH, HEIGHT)
 
         if summary_win is not None and summary_win.winfo_exists():
             try:
@@ -2318,7 +2504,12 @@ if __name__ == "__main__":
                 WIDTH, HEIGHT = event.w, event.h
                 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 
-            elif event.type == pygame.MOUSEBUTTONDOWN:
+            modal_was_open = info_modal.visible
+            info_modal.handle_event(event, WIDTH, HEIGHT)
+            if modal_was_open:
+                continue
+
+            if event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
                 btn = event.button
 
@@ -2359,10 +2550,7 @@ if __name__ == "__main__":
 
                     # Info btn
                     elif _info_btn_rect.collidepoint(mx, my):
-                        if info_open:
-                            close_info_window()
-                        else:
-                            open_info_window()
+                        info_modal.show()
 
                     # Scope pill toggle
                     elif scope_rects[0].collidepoint(mx, my):
@@ -2423,6 +2611,17 @@ if __name__ == "__main__":
                         open_text_file(state.english_file)
                     elif sp_link.collidepoint(mx, my):
                         open_text_file(state.results_file)
+
+                    # Results page navigation buttons
+                    elif page_prev_rect and page_prev_rect.collidepoint(mx, my):
+                        if state.search_results:
+                            state.preview_start = max(0, state.preview_start - state.max_preview)
+                    elif page_next_rect and page_next_rect.collidepoint(mx, my):
+                        if state.search_results:
+                            state.preview_start = min(
+                                len(state.search_results) - 1,
+                                state.preview_start + state.max_preview,
+                            )
 
                     else:
                         if state.finder_mode == "letter_match":
@@ -2664,10 +2863,7 @@ if __name__ == "__main__":
                         )
 
                 elif event.key == pygame.K_i and (event.mod & pygame.KMOD_CTRL):
-                    if info_open:
-                        close_info_window()
-                    else:
-                        open_info_window()
+                    info_modal.show()
 
                 else:
                     ch = event.unicode
@@ -2683,8 +2879,6 @@ if __name__ == "__main__":
 
     if summary_win is not None and summary_win.winfo_exists():
         summary_win.destroy()
-    if info_win is not None and info_win.winfo_exists():
-        info_win.destroy()
     if tk_root is not None and tk_root.winfo_exists():
         tk_root.destroy()
 
