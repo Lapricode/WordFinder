@@ -5,6 +5,7 @@ from tkinter import Tk, filedialog, Toplevel, Text, Button, END, TclError
 from collections import Counter
 import subprocess
 from itertools import product
+import platform
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -527,7 +528,27 @@ WIDTH, HEIGHT = 1400, 700
 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 clock = pygame.time.Clock()
 
-FONT_FAMILY = "sans-serif, DejaVu Sans, Noto Sans, Liberation Sans, Book, Regular, segoeui, dejavusans, notosans, arial, liberationsans"
+pygame.font.init()
+
+def normalize_font_name(name: str) -> str:
+    return name.lower().replace(" ", "").replace("-", "").replace("_", "")
+
+def pick_font(preferred):
+    available = {normalize_font_name(f) for f in pygame.font.get_fonts()}
+    for name in preferred:
+        key = normalize_font_name(name)
+        if key in available:
+            return key
+    return "dejavusans"
+
+SYSTEM = platform.system()
+
+if SYSTEM == "Windows":
+    FONT_FAMILY = pick_font(["Segoe UI", "Arial", "DejaVu Sans", "Noto Sans", "Liberation Sans"])
+elif SYSTEM == "Darwin":  # macOS
+    FONT_FAMILY = pick_font(["SF Pro Text", "Helvetica Neue", "Arial", "DejaVu Sans", "Noto Sans"])
+else:  # Linux
+    FONT_FAMILY = pick_font(["DejaVu Sans", "Noto Sans", "Liberation Sans", "Arial","Segoe UI"])
 
 FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
 FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)
