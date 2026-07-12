@@ -45,10 +45,10 @@ python WordFinder.py
 
 The app uses text files as word sources:
 
-- `greek_words.txt` — Greek word list
-- `english_words.txt` — English word list
-- `wordle_dictionary.txt` — additional dictionary/source list
-- `results.txt` — output file for saved results
+- `words/greek_words.txt` — Greek word list
+- `words/english_words.txt` — English word list
+- `words/wordle_dictionary.txt` — English words for wordle
+- `words/results.txt` — output file for saved results
 
 You can replace or edit these files with your own word lists, as long as they remain plain text files.
 

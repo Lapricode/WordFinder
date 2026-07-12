@@ -1207,9 +1207,9 @@ class AppState:
 
         self.search_results = []
         self.status = "Load a word list, then press Search or Enter."
-        self.greek_file = resource_path("greek_words.txt")
-        self.english_file = resource_path("english_words.txt")
-        self.results_file = resource_path("results.txt")
+        self.greek_file = resource_path("words/greek_words.txt")
+        self.english_file = resource_path("words/english_words.txt")
+        self.results_file = resource_path("words/results.txt")
         self.theme = "dark"
 
         # Results selection: word -> "save" | "exclude" | None
