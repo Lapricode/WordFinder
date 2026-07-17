@@ -689,7 +689,7 @@ _S2X = _S1X
 _S2W = 300
 
 # How many pattern slots per mode
-MAX_PATTERN_SLOTS = 5
+MAX_PATTERN_SLOTS = 10
 
 # X position for +/- buttons in Pattern Hunt (fixed at left of slot area)
 _PH_PM_X = PAD + LEFT_LABEL_W - 22  # just before slots start
@@ -972,6 +972,10 @@ class InfoModal:
         (f"/ (slash) {special_caracters["-"]} switch between Greek and English word lists.", "bullet"),
         (f"Ctrl+Space {special_caracters["-"]} expand / collapse Pattern Hunt slot(s).", "bullet"),
         (f"Ctrl+I or the circular i button {special_caracters["-"]} open this instructions window.", "bullet"),
+        (f"Shift + / {special_caracters['-']} increase/decrease word length. In Pattern Hunt, "
+        "holding at 1 and pressing Shift+- switches to \"All\"; from \"All\", Shift++ returns to 1.", "bullet"),
+        (f"Ctrl + / {special_caracters['-']} increase/decrease max preview.", "bullet"),
+        (f"+ / {special_caracters['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.", "bullet"),
         ("", "gap"),
 
         ("Results panel:", "heading"),
@@ -1424,7 +1428,7 @@ def refresh_summary_window():
                     group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
                 label = "".join(group)
                 parts.append(f"{label} (x{count})" if count > 1 else label)
-            lines.append("  " + " · ".join(parts))
+            lines.append("  " + f" {special_caracters["*"]} ".join(parts))
         else:
             lines.append(f"  {special_caracters["-"]}")
     else:
@@ -1695,12 +1699,12 @@ def render_header(mouse_pos):
     )
 
     hints1 = (
-        f"Backspace = Clear  ·  Enter = Search  ·  (Shift +) {special_caracters["<"]} {special_caracters[">"]} = Navigate  ·  {special_caracters["^"]} {special_caracters["v"]} = Mode"
-        f"  ·  Tab = Letter Match/Pattern Hunt  ·  Shift+Space = Slot/All"
+        f"Backspace = Clear  {special_caracters["*"]}  Enter = Search  {special_caracters["*"]}  (Shift +) {special_caracters["<"]} {special_caracters[">"]} = Navigate  {special_caracters["*"]}  {special_caracters["^"]} {special_caracters["v"]} = Mode"
+        f"  {special_caracters["*"]}  Tab = Letter Match/Pattern Hunt  {special_caracters["*"]}  Shift+Space = Slot/All  {special_caracters["*"]}  Ctrl+Space = Expand (PH)"
     )
     hints2 = (
-        " / = Greek/English  ·  Ctrl+Space = Expand (PH)  ·  Ctrl+S = Save"
-        "  ·  Page Up/Down = Scroll  ·  Ctrl+I = Info"
+        f"/ = Greek/English  {special_caracters["*"]}  Ctrl+S = Save  {special_caracters["*"]}  Page Up/Down = Scroll  {special_caracters["*"]}  Shift+/- = Word length  {special_caracters["*"]}  Ctrl+/- = Max preview"
+        f"  {special_caracters["*"]}  +/- = Add/remove PH slot  {special_caracters["*"]}  Ctrl+I = Info"
     )
     blit_text(
         screen, hints1, FONT_SM, MUTED, PAD + 200, H_HEADER * 0.28, anchor="midleft"
@@ -1969,11 +1973,11 @@ def format_exist_letters(counter):
             group = (key,)
         label = "".join(group)
         parts.append(f"{label} (x{count})" if count > 1 else label)
-    return "  ·  ".join(parts) if parts else f"{special_caracters["-"]}"
+    return f"  {special_caracters["*"]}  ".join(parts) if parts else f"{special_caracters["-"]}"
 
 
 def render_workspace_lm(mouse_pos):
-    """Letter Match workspace. Returns (slot_w, slot_h, sx, ty, gap, table_bottom_y, summary_btn)."""
+    """Letter Match workspace. Returns (slot_w, slot_h, sx, ty, gap, table_bottom_y, summary_btn, lm_ui)."""
     slot_w, slot_h, sx, ty, gap = _slot_layout()
 
     # ── Position squares ──────────────────────────────────────────
@@ -2051,6 +2055,15 @@ def render_workspace_lm(mouse_pos):
 
     hover_text = None
     hover_pos = None
+    hover_text = None
+    hover_pos = None
+
+    lm_ui = {
+        "valid_cells": [],    # list of (position_index, rect)
+        "invalid_cells": [],  # list of (position_index, rect)
+        "exist_chips": [],    # list of (exist_index, rect)
+        "exist_row": None,    # whole-row rect, clickable even with no chips
+    }
 
     for label, sets, bg_c, bdr_c, lbl_c, mode_str in [
         ("VALID", state.valid_sets, GREEN_BG, GREEN_BDR, GREEN, "valid"),
@@ -2076,6 +2089,9 @@ def render_workspace_lm(mouse_pos):
                 display_letters or f"{special_caracters["-"]}", True, TEXT if letters else MUTED
             )
             screen.blit(img, img.get_rect(center=cell.center))
+
+            lm_ui[f"{mode_str}_cells"].append((i, cell))
+
             if cell.collidepoint(mouse_pos):
                 letters_full = "".join(sorted(sets[i])) or f"{special_caracters["-"]}"
                 hover_text = f"{label} slot {i + 1}: {letters_full}"
@@ -2086,6 +2102,7 @@ def render_workspace_lm(mouse_pos):
     exist_items = state.get_exist_items()
     exist_row_h = row_h
     exist_rect = pygame.Rect(PAD, table_y, WIDTH - 2 * PAD, exist_row_h)
+    lm_ui["exist_row"] = exist_rect
 
     # Highlighted border for exist row when mode is "exist"
     if state.input_mode == "exist":
@@ -2115,6 +2132,9 @@ def render_workspace_lm(mouse_pos):
             disp = f"{label}x{count}" if count > 1 else label
             tw_chip = FONT_SM.size(disp)[0] + 16
             chip_rect = pygame.Rect(chip_x, chip_y, tw_chip, chip_h)
+
+            lm_ui["exist_chips"].append((ei, chip_rect))
+
             is_sel = state.input_mode == "exist" and ei == state.selected_exist_idx
             chip_bg = BROWN_BDR if is_sel else BROWN_BG
             chip_bdr = BROWN if is_sel else BROWN_BDR
@@ -2146,7 +2166,7 @@ def render_workspace_lm(mouse_pos):
         pygame.draw.rect(screen, BORDER, tip_rect, 1, border_radius=8)
         screen.blit(tip_img, tip_img.get_rect(center=tip_rect.center))
 
-    return slot_w, slot_h, sx, ty, gap, RESULTS_TOP_Y, summary_btn
+    return slot_w, slot_h, sx, ty, gap, RESULTS_TOP_Y, summary_btn, lm_ui
 
 
 # ─── Pattern Hunt workspace ───────────────────────────────────────
@@ -2347,11 +2367,11 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         sel_parts.append(f"{n_save} words to save {special_caracters["[OK]"]}")
     if n_excl:
         sel_parts.append(f"{n_excl} words excluded X")
-    sel_str = "  |  " + "  ·  ".join(sel_parts) if sel_parts else ""
+    sel_str = "  |  " + f"  {special_caracters["*"]}  ".join(sel_parts) if sel_parts else ""
 
     blit_text(screen, state.status, FONT_SM, MUTED, panel.x + PAD, panel.y + 10)
 
-    cnt = f"{n} total  ·  showing {start_index} - {end_index}"
+    cnt = f"{n} total  {special_caracters["*"]}  showing {start_index} - {end_index}"
     cnt_w = FONT_SM.size(cnt)[0]
     nav_w, nav_h, nav_gap = 22, 20, 6
     group_w = nav_w * 2 + nav_gap * 2 + cnt_w
@@ -2469,7 +2489,8 @@ if __name__ == "__main__":
     _lm_slot_w = 30
     _lm_slot_h = 32
     _lm_slot_gap = 8
-    _ph_slot_rects = {}  # set by render_workspace_ph
+    lm_ui = {}
+    _ph_slot_rects = {}
 
     while running:
         screen.fill(BG)
@@ -2492,9 +2513,7 @@ if __name__ == "__main__":
         )
 
         if state.finder_mode == "letter_match":
-            slot_w, slot_h, sx, ty, gap, tby, summary_btn = render_workspace_lm(
-                mouse_pos
-            )
+            slot_w, slot_h, sx, ty, gap, tby, summary_btn, lm_ui = render_workspace_lm(mouse_pos)
             _lm_slot_sx = sx
             _lm_slot_ty = ty
             _lm_slot_w = slot_w
@@ -2647,6 +2666,7 @@ if __name__ == "__main__":
 
                     else:
                         if state.finder_mode == "letter_match":
+                            clicked = False
                             # Slot selection
                             for i in range(state.word_length):
                                 r = pygame.Rect(
@@ -2657,7 +2677,42 @@ if __name__ == "__main__":
                                 )
                                 if r.collidepoint(mx, my):
                                     state.selected_pos = i
+                                    clicked = True
                                     break
+                                    # VALID cells
+                            if not clicked:
+                                for i, cell in lm_ui.get("valid_cells", []):
+                                    if cell.collidepoint(mx, my):
+                                        state.selected_pos = i
+                                        state.input_mode = "valid"
+                                        clicked = True
+                                        break
+
+                            # INVALID cells
+                            if not clicked:
+                                for i, cell in lm_ui.get("invalid_cells", []):
+                                    if cell.collidepoint(mx, my):
+                                        state.selected_pos = i
+                                        state.input_mode = "invalid"
+                                        clicked = True
+                                        break
+
+                            # EXIST chips (specific item)
+                            if not clicked:
+                                for ei, chip in lm_ui.get("exist_chips", []):
+                                    if chip.collidepoint(mx, my):
+                                        state.input_mode = "exist"
+                                        state.selected_exist_idx = ei
+                                        clicked = True
+                                        break
+
+                            # EXIST row (anywhere else in the bar, e.g. empty space or no chips yet)
+                            if not clicked:
+                                exist_row = lm_ui.get("exist_row")
+                                if exist_row is not None and exist_row.collidepoint(mx, my):
+                                    state.input_mode = "exist"
+                                    clicked = True
+                                    
                         else:
                             # PH grid clicks
                             clicked_ph = False
@@ -2768,7 +2823,7 @@ if __name__ == "__main__":
                     else:
                         ph_backspace()
                     refresh_summary_window()
-
+                
                 elif event.key == pygame.K_LEFT:
                     if state.finder_mode == "letter_match":
                         if state.input_mode == "exist":
@@ -2886,6 +2941,44 @@ if __name__ == "__main__":
 
                 elif event.key == pygame.K_i and (event.mod & pygame.KMOD_CTRL):
                     info_modal.show()
+
+                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS) and (event.mod & pygame.KMOD_SHIFT) and not (event.mod & pygame.KMOD_CTRL):
+                    if state.finder_mode == "pattern_hunt" and state.ph_word_length_all:
+                        state.ph_word_length_all = False
+                        state.word_length = 1
+                    else:
+                        state.ph_word_length_all = False
+                        if state.word_length < MAX_WORD_LENGTH:
+                            state.word_length += 1
+                            state.rebuild_sets()
+                    refresh_summary_window()
+
+                elif event.key == pygame.K_MINUS and (event.mod & pygame.KMOD_SHIFT) and not (event.mod & pygame.KMOD_CTRL):
+                    if state.finder_mode == "pattern_hunt" and state.word_length <= 1 and not state.ph_word_length_all:
+                        state.ph_word_length_all = True
+                    elif not (state.finder_mode == "pattern_hunt" and state.ph_word_length_all):
+                        if state.word_length > 1:
+                            state.word_length -= 1
+                            state.rebuild_sets()
+                    refresh_summary_window()
+
+                elif event.key == pygame.K_EQUALS and (event.mod & pygame.KMOD_CTRL) and not (event.mod & pygame.KMOD_SHIFT):
+                    state.max_preview = clamp(state.max_preview + 1, 1, MAX_MAX_PREVIEW)
+                    state.preview_start = clamp(state.preview_start, 0, max(len(state.search_results) - 1, 0))
+
+                elif event.key == pygame.K_MINUS and (event.mod & pygame.KMOD_CTRL) and not (event.mod & pygame.KMOD_SHIFT):
+                    state.max_preview = clamp(state.max_preview - 1, 1, MAX_MAX_PREVIEW)
+                    state.preview_start = clamp(state.preview_start, 0, max(len(state.search_results) - 1, 0))
+
+                elif event.key == pygame.K_EQUALS and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)):
+                    if state.finder_mode == "pattern_hunt":
+                        ph_adjust_cell_count(1)
+                        refresh_summary_window()
+
+                elif event.key == pygame.K_MINUS and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)):
+                    if state.finder_mode == "pattern_hunt":
+                        ph_adjust_cell_count(-1)
+                        refresh_summary_window()
 
                 else:
                     ch = event.unicode

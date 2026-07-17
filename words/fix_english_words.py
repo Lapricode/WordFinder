@@ -3,8 +3,8 @@ from pathlib import Path
 ENGLISH_LETTERS = {chr(c) for c in range(ord("a"), ord("z") + 1)}
 ENGLISH_LETTERS |= {ch.upper() for ch in ENGLISH_LETTERS}
 
-input_file = Path("words.txt")
-# input_file = Path("english_words.txt")
+input_file = Path("english_words.txt")
+# input_file = Path("wordle_dictionary.txt")
 output_file = Path("output.txt")
 
 
