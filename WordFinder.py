@@ -836,7 +836,7 @@ def draw_slider(
     return track, knob
 
 
-def short_path(p, n=34):
+def short_path(p, n=25):
     return p if len(p) <= n else "…" + p[-(n - 1) :]
 
 
