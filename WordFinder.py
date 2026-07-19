@@ -818,26 +818,17 @@ PAD = 20
 GAP = 20
 
 H_HEADER = 65  # taller to fit two-line title
-H_CTRL = 80  # taller ribbon for better spacing
-H_FILES = 60
+H_CTRL = 100
+H_FILES = 80
 H_TOP = H_HEADER + H_CTRL + H_FILES
 
 WORKSPACE_Y = H_TOP + PAD
 LEFT_LABEL_W = 180
 
-# Finder button width in the controls ribbon
-FINDER_BTN_W = 130
-
 # Review buttons appearance constants
 REVIEW_BTN_W = 165
 REVIEW_BTN_H = 30
 RESULTS_TOP_Y = WORKSPACE_Y + PAD + 170
-
-# Slider x-positions: right of finder button with some gap
-_S1X = PAD + FINDER_BTN_W + 40
-_S1W = 300
-_S2X = _S1X
-_S2W = 300
 
 # How many pattern slots per mode
 MAX_PATTERN_SLOTS = 10
@@ -1161,7 +1152,7 @@ class InfoModal:
 
         ("Selection counts", "heading"),
         ("The top of the results panel shows how many words are currently "
-         "chosen and excluded, e.g. \"12 words chosen [OK]\" and \"3 words "
+         f"selected and excluded, e.g. \"12 words selected {special_caracters["[OK]"]}\" and \"3 words "
          "excluded X\". This selection is shared by Save, Translate, and "
          "Get Meaning.", "body"),
         ("", "gap"),
@@ -1595,8 +1586,8 @@ class AppState:
         self.english_count = 0
         self.results_count = 0
         self.language = "greek"
-        self.show_translation = False
-        self.show_meaning = False
+        self.show_translation = True
+        self.show_meaning = True
         self.english_meanings_file = resource_path("words/english_dictionary.json")
         self.greek_meanings_file = resource_path("words/greek_dictionary.json")
         self._translation_cache = {}  # (lang, word) -> loaded json dict (lazy, per active_file)
@@ -2156,6 +2147,7 @@ def format_meaning_lines(entry, language):
     """Turns a JSON entry into a list of short display strings, nicely
     presented (part of speech, definition, examples) per item 5's request."""
     lines = []
+    senses_limit = 10
     if entry is None:
         return [f"No saved meaning yet {special_caracters['-']} use Get Meaning."]
 
@@ -2165,13 +2157,13 @@ def format_meaning_lines(entry, language):
             lines.append(f"No senses found {special_caracters['-']} try Get Meaning.")
         else:
             pos_names = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
-            for i, sense in enumerate(senses[:4], 1):  # cap to keep tooltip readable
+            for i, sense in enumerate(senses[:senses_limit], 1):  # cap to keep tooltip readable
                 pos = pos_names.get(sense.get("part_of_speech", ""), sense.get("part_of_speech", "?"))
                 lines.append(f"{i}. ({pos}) {sense.get('definition', '')}")
                 for ex in (sense.get("examples") or [])[:1]:
                     lines.append(f'    e.g. "{ex}"')
-            if len(senses) > 4:
-                lines.append(f"…and {len(senses) - 4} more sense(s)")
+            if len(senses) > senses_limit:
+                lines.append(f"…and {len(senses) - senses_limit} more sense(s)")
     else:
         # Greek source words only carry an english_translation in their JSON,
         # no WordNet-style senses (WordNet is English-only), so show that.
@@ -2257,7 +2249,7 @@ def render_header(mouse_pos):
         screen, hints2, FONT_SM, MUTED, PAD + 200, H_HEADER * 0.70, anchor="midleft"
     )
 
-    r = 14
+    r = 0.25 * H_HEADER
     cx = WIDTH - PAD - r
     cy = H_HEADER // 2
     _info_btn_rect = pygame.Rect(cx - r, cy - r, 2 * r, 2 * r)
@@ -2274,20 +2266,6 @@ def render_header(mouse_pos):
         hovered=_info_btn_rect.collidepoint(mouse_pos),
         font=FONT_LG,
     )
-
-
-def recompute_layout_constants():
-    """H_CTRL grows when Pattern Hunt's second toggle row (Valid/Invalid/Exist)
-    is shown. Called once per frame, before any rendering, so every renderer
-    that reads H_HEADER/H_CTRL/H_FILES/H_TOP/WORKSPACE_Y/RESULTS_TOP_Y sees
-    values consistent with the current finder_mode."""
-    global H_CTRL, H_FILES, H_TOP, WORKSPACE_Y, RESULTS_TOP_Y
-
-    H_CTRL = 130 if state.finder_mode == "pattern_hunt" else 80
-    H_FILES = 108  # taller to fit the Translate/Meaning checkboxes + stacked buttons row
-    H_TOP = H_HEADER + H_CTRL + H_FILES
-    WORKSPACE_Y = H_TOP + PAD
-    RESULTS_TOP_Y = WORKSPACE_Y + PAD + 170
 
 
 def distribute_columns(total_width, left_pad, right_pad, widths):
@@ -2319,27 +2297,42 @@ def render_controls(mouse_pos):
     pygame.draw.rect(screen, PANEL2, (0, y0, WIDTH, H_CTRL))
     pygame.draw.line(screen, BORDER, (0, y0 + H_CTRL), (WIDTH, y0 + H_CTRL))
 
+    btn_h = 0.6 * H_CTRL
+    
     # ── Column widths (fixed) ──────────────────────────────────────
-    btn_h = 50
+    finder_btn_w = 150
     slider_col_w = 300
-    mode_w = 285
-    scope_w = 150
-    lang_w = 175
-    search_w = 120
+    mode_w = 300
+    scope_w = 200
+    lang_w = 200
+    search_w = 180
+    col_widths = [finder_btn_w, slider_col_w, mode_w, scope_w, lang_w, search_w]
 
-    col_widths = [FINDER_BTN_W, slider_col_w, mode_w, scope_w, lang_w, search_w]
+    if sum(col_widths) > WIDTH:
+        width_surplus = sum(col_widths) - WIDTH
+        width_remove = (width_surplus + 100) / len(col_widths)
+        finder_btn_w -= width_remove
+        slider_col_w -= width_remove
+        mode_w -= width_remove
+        scope_w -= width_remove
+        lang_w -= width_remove
+        search_w -= width_remove
+        col_widths = [finder_btn_w, slider_col_w, mode_w, scope_w, lang_w, search_w]
+
     xs = distribute_columns(WIDTH, PAD, PAD, col_widths)
     finder_x, slider_x, mode_x, scope_x, lang_x, search_x = xs
 
-    # Row 1 (Start/Middle/End or Valid/Invalid/Exist for Letter Match) sits at
-    # the vertical center of the *first* H_CTRL "band" (80px tall, same as before).
-    band1_h = 80
-    btn_y = y0 + (band1_h - btn_h) / 2
-    pill_h = 40
-    pill_y = y0 + (band1_h - pill_h) / 2
+    # Two stacked rows inside the same 80px header
+    pill_h = 0.4 * H_CTRL
+    pill_y_default = y0 + (H_CTRL - pill_h) / 2
+    if state.finder_mode == "letter_match":
+        pill_y_top = y0 + (H_CTRL - pill_h) / 2
+    elif state.finder_mode == "pattern_hunt":
+        pill_y_top = y0 + (H_CTRL / 2 - pill_h) / 2
+        pill_y_bottom = y0 + H_CTRL / 2 + (H_CTRL / 2 - pill_h) / 2
 
     # ── Finder Mode Button ──────────────────────────────────────────
-    finder_btn_rect = pygame.Rect(finder_x, btn_y, FINDER_BTN_W, btn_h)
+    finder_btn_rect = pygame.Rect(finder_x, y0 + (H_CTRL - btn_h) / 2, finder_btn_w, btn_h)
     finder_lbl = (
         "Letter Match" if state.finder_mode == "letter_match" else "Pattern Hunt"
     )
@@ -2350,8 +2343,8 @@ def render_controls(mouse_pos):
 
     # ── Sliders (stacked within the slider column) ───────────────────
     sl_w = slider_col_w
-    cy1 = y0 + 2
-    cy2 = y0 + band1_h / 2 + 2
+    cy1 = y0 + 0.1 * H_CTRL
+    cy2 = y0 + H_CTRL / 2 + 0.1 * H_CTRL
 
     is_all = state.finder_mode == "pattern_hunt" and state.ph_word_length_all
     active_word_length = (
@@ -2365,7 +2358,7 @@ def render_controls(mouse_pos):
         screen, slider_x, cy2, sl_w, 1, MAX_MAX_PREVIEW, state.max_preview, "Max preview"
     )
 
-    # ── Mode pill toggle (row 1: Valid/Invalid/Exist OR Start/Middle/End) ──
+    # ── Main mode pill toggle ───────────────────────────────────────
     if state.finder_mode == "letter_match":
         mode_labels = ["Valid", "Invalid", "Exist"]
         mode_colors = [GREEN, RED, BROWN]
@@ -2375,14 +2368,26 @@ def render_controls(mouse_pos):
         mode_colors = [TEAL, PURPLE, PINK]
         mode_idx = {"start": 0, "middle": 1, "end": 2}[state.ph_mode]
 
-    m_rect = pygame.Rect(mode_x, pill_y, mode_w, pill_h)
+    m_rect = pygame.Rect(mode_x, pill_y_top, mode_w, pill_h)
     m_rects = draw_pill_toggle(
         screen, m_rect, mode_labels, mode_idx, mode_colors,
         hovered=m_rect.collidepoint(mouse_pos),
     )
 
+    # ── Pattern Hunt secondary column toggle, stacked directly below ──
+    ph_col_rects = None
+    if state.finder_mode == "pattern_hunt":
+        ph_col_rect = pygame.Rect(mode_x, pill_y_bottom, mode_w, pill_h)
+        ph_col_labels = ["Valid", "Invalid", "Exist"]
+        ph_col_colors = [GREEN, RED, BROWN]
+        ph_col_idx = {"valid": 0, "invalid": 1, "exist": 2}[state.ph_col]
+        ph_col_rects = draw_pill_toggle(
+            screen, ph_col_rect, ph_col_labels, ph_col_idx, ph_col_colors,
+            hovered=ph_col_rect.collidepoint(mouse_pos),
+        )
+
     # ── Scope pill toggle (Slot / All) ────────────────────────────
-    scope_rect = pygame.Rect(scope_x, pill_y, scope_w, pill_h)
+    scope_rect = pygame.Rect(scope_x, pill_y_default, scope_w, pill_h)
     active_scope = (
         state.input_scope if state.finder_mode == "letter_match" else state.ph_scope
     )
@@ -2392,38 +2397,18 @@ def render_controls(mouse_pos):
     )
 
     # ── Language pill toggle ──────────────────────────────────────
-    lang_rect = pygame.Rect(lang_x, pill_y, lang_w, pill_h)
+    lang_rect = pygame.Rect(lang_x, pill_y_default, lang_w, pill_h)
     lang_rects = draw_pill_toggle(
         screen, lang_rect, ["Greek", "English"], 0 if state.language == "greek" else 1,
         [ACCENT, ACCENT], hovered=lang_rect.collidepoint(mouse_pos),
     )
 
     # ── Search button ─────────────────────────────────────────────
-    search_rect = pygame.Rect(search_x, btn_y, search_w, btn_h)
+    search_rect = pygame.Rect(search_x, y0 + (H_CTRL - btn_h) / 2, search_w, btn_h)
     draw_button(
         screen, search_rect, "Search", GREEN, WHITE,
         hovered=search_rect.collidepoint(mouse_pos), font=FONT_LG,
     )
-
-    # ── Row 2 (Pattern Hunt only): Valid / Invalid / Exist column toggle ──
-    ph_col_rects = None
-    if state.finder_mode == "pattern_hunt":
-        band2_y = y0 + band1_h
-        band2_h = H_CTRL - band1_h
-        pill2_y = band2_y + (band2_h - pill_h) / 2
-
-        blit_text(
-            screen, "Column:", FONT_SM, MUTED, finder_x, pill2_y + pill_h / 2, anchor="midleft"
-        )
-        col_label_w = 80
-        ph_col_rect = pygame.Rect(finder_x + col_label_w, pill2_y, mode_w + slider_col_w - col_label_w + 40, pill_h)
-        ph_col_labels = ["Valid", "Invalid", "Exist"]
-        ph_col_colors = [GREEN, RED, BROWN]
-        ph_col_idx = {"valid": 0, "invalid": 1, "exist": 2}[state.ph_col]
-        ph_col_rects = draw_pill_toggle(
-            screen, ph_col_rect, ph_col_labels, ph_col_idx, ph_col_colors,
-            hovered=ph_col_rect.collidepoint(mouse_pos),
-        )
 
     return (
         t1, k1, t2, k2, m_rects, scope_rects, lang_rects, search_rect,
@@ -2436,26 +2421,25 @@ def render_file_row(mouse_pos):
     pygame.draw.rect(screen, BG, (0, y0, WIDTH, H_FILES))
     pygame.draw.line(screen, BORDER, (0, y0 + H_FILES), (WIDTH, y0 + H_FILES))
 
-    by = y0 + 6
-    bh = 40  # file unit button height, first row
-    BW = 88
+    by = y0 + (H_FILES - 40) / 2
+    bh = 0.5 * H_FILES  # file unit button height
+    BW = 90
     unit_w = BW + 6 + 126  # button + gap + label/path area, used only for spacing math
 
     def file_unit(x, label, path, count):
         br = pygame.Rect(x, by, BW, bh)
+        tx = x + BW + 6
+        path_img = LINK_FONT_SM.render(short_path(path), True, ACCENT)
+        path_rect = path_img.get_rect(topleft=(tx, by + 2))
+        screen.blit(path_img, path_rect)
+        blit_text(screen, f"{count} words", FONT_SM, MUTED, tx, by + 20, anchor="topleft")
+        hover_rect = pygame.Rect(tx, by, 126, 36)
+
         draw_button(
             screen, br, label, DARK, WHITE, radius=7,
             hovered=br.collidepoint(mouse_pos), font=FONT_MD,
         )
-        tx = x + BW + 6
-        path_img = LINK_FONT_SM.render(short_path(path), True, ACCENT)
-        path_rect = path_img.get_rect(topleft=(tx, by + 1))
-        screen.blit(path_img, path_rect)
-        blit_text(screen, f"{count} words", FONT_SM, MUTED, tx, by + 20, anchor="topleft")
 
-        # hoverable full path tooltip. We widen the hit area a bit
-        # vertically so it's easy to trigger, and show the *full* (untruncated) path.
-        hover_rect = pygame.Rect(tx, by, 126, 36)
         if hover_rect.collidepoint(mouse_pos) and path:
             tip_img = FONT_SM.render(path, True, WHITE)
             tip_pad = 6
@@ -2470,27 +2454,28 @@ def render_file_row(mouse_pos):
         return br, path_rect
 
     # ── Column widths for equal spacing across the whole row ──
-    # These widths were chosen so the 7 columns fit the default 1400px
-    # canvas with a comfortable gap; on much narrower windows the row will
-    # get tight, consistent with how this ribbon already behaved before.
-    checkbox_col_w = 180
-    stacked_btn_col_w = 130
-    theme_w = 110
-    save_w = 110
+    action_col_w = 180
+    theme_w = 100
+    save_w = 130
+    col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
 
-    col_widths = [unit_w, unit_w, unit_w, checkbox_col_w, stacked_btn_col_w, theme_w, save_w]
+    if sum(col_widths) > WIDTH:
+        width_surplus = sum(col_widths) - WIDTH
+        width_remove = (width_surplus + 100) / len(col_widths)
+        unit_w -= width_remove
+        action_col_w -= width_remove
+        save_w -= width_remove
+        theme_w -= width_remove
+        col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
+
     xs = distribute_columns(WIDTH, PAD, PAD, col_widths)
-    greek_x, english_x, saveto_x, chk_x, stackbtn_x, theme_x, save_x = xs
+    greek_x, english_x, saveto_x, translate_x, meaning_x, save_x, theme_x = xs
 
-    gf_btn, gf_link = file_unit(greek_x, "Greek", state.greek_file, state.greek_count)
-    ef_btn, ef_link = file_unit(english_x, "English", state.english_file, state.english_count)
-    sp_btn, sp_link = file_unit(saveto_x, "Save to", state.results_file, state.results_count)
-
-    # ── Translate / Meaning checkboxes ─────────────────────
-    chk_size = 18
-    chk_gap = 10
-    chk_y1 = by
-    chk_y2 = by + chk_size + 8
+    # ── Show translation / Show meaning stacked sections ─────────────
+    chk_size = 0.3 * H_FILES
+    action_btn_h = 0.4 * H_FILES
+    chk_y = y0 + 0.1 * H_FILES
+    btn_y = y0 + H_FILES / 2
 
     def draw_checkbox(x, y, checked, label):
         box = pygame.Rect(x, y, chk_size, chk_size)
@@ -2503,26 +2488,31 @@ def render_file_row(mouse_pos):
         screen.blit(lbl_img, lbl_img.get_rect(midleft=(box.right + 8, box.centery)))
         return box
 
-    translate_chk_rect = draw_checkbox(chk_x, chk_y1, state.show_translation, "Show translation")
-    meaning_chk_rect = draw_checkbox(chk_x, chk_y2, state.show_meaning, "Show meaning")
+    translate_chk_rect = draw_checkbox(translate_x, chk_y, state.show_translation, "Show Translation")
+    meaning_chk_rect = draw_checkbox(meaning_x, chk_y, state.show_meaning, "Show Meaning")
 
-    # ── Translate / Get Meaning stacked buttons ────────────
-    stack_btn_h = 32
-    stack_btn_w = stacked_btn_col_w
-    translate_btn = pygame.Rect(stackbtn_x, by, stack_btn_w, stack_btn_h)
-    meaning_btn = pygame.Rect(stackbtn_x, by + stack_btn_h + 4, stack_btn_w, stack_btn_h)
+    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w, action_btn_h)
+    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w, action_btn_h)
+
     draw_button(
         screen, translate_btn, "Translate", PURPLE, WHITE, radius=7,
-        hovered=translate_btn.collidepoint(mouse_pos), font=FONT_SM,
+        hovered=translate_btn.collidepoint(mouse_pos), font=FONT_MD,
     )
     draw_button(
         screen, meaning_btn, "Get Meaning", PURPLE, WHITE, radius=7,
-        hovered=meaning_btn.collidepoint(mouse_pos), font=FONT_SM,
+        hovered=meaning_btn.collidepoint(mouse_pos), font=FONT_MD,
     )
 
-    # ── Theme + Save (second visual row, right side, matches old placement) ──
-    btn_h2 = 40
-    btn_y2 = by
+    # ── Theme + Save (right side) ───────────────────────────────────
+    btn_h2 = 0.6 * H_FILES
+    btn_y2 = by + (40 - btn_h2) / 2
+
+    sv_btn = pygame.Rect(save_x, btn_y2, save_w, btn_h2)
+    draw_button(
+        screen, sv_btn, "Save", PURPLE, WHITE,
+        hovered=sv_btn.collidepoint(mouse_pos), font=FONT_LG,
+    )
+
     theme_btn = pygame.Rect(theme_x, btn_y2, theme_w, btn_h2)
     theme_label = "Light" if state.theme == "light" else "Dark"
     draw_button(
@@ -2530,11 +2520,11 @@ def render_file_row(mouse_pos):
         hovered=theme_btn.collidepoint(mouse_pos), font=FONT_MD,
     )
 
-    sv_btn = pygame.Rect(save_x, btn_y2, save_w, btn_h2)
-    draw_button(
-        screen, sv_btn, "Save", PURPLE, WHITE,
-        hovered=sv_btn.collidepoint(mouse_pos), font=FONT_LG,
-    )
+    # ── Show Files buttons and paths ─────────────
+
+    sp_btn, sp_link = file_unit(saveto_x, "Save to", state.results_file, state.results_count)
+    ef_btn, ef_link = file_unit(english_x, "English", state.english_file, state.english_count)
+    gf_btn, gf_link = file_unit(greek_x, "Greek", state.greek_file, state.greek_count)
 
     return (
         gf_btn, gf_link, ef_btn, ef_link, sp_btn, sp_link, theme_btn, sv_btn,
@@ -2543,7 +2533,6 @@ def render_file_row(mouse_pos):
 
 
 # ─── Letter Match workspace ───────────────────────────────────────
-
 
 def _slot_layout():
     gap = 8
@@ -3132,7 +3121,6 @@ if __name__ == "__main__":
         mouse_pos = pygame.mouse.get_pos()
 
         render_header(mouse_pos)
-        recompute_layout_constants()
         (
             t1,
             k1,
