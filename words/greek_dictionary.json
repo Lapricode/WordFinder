@@ -14228,5 +14228,15 @@
     "input_word": "Βογιατζίδης",
     "english_translation": "Vogiatzidis",
     "status": "ok"
+  },
+  "βοιές": {
+    "input_word": "Βοιές",
+    "english_translation": "Cheers",
+    "status": "ok"
+  },
+  "βοιαί": {
+    "input_word": "Βοιαί",
+    "english_translation": "Wow",
+    "status": "ok"
   }
 }
