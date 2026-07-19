@@ -104,8 +104,8 @@ def build_status(senses: list[dict], greek_translation: str | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("input_txt", help="Text file containing one word per line")
-    parser.add_argument("output_json", help="Output JSON file")
+    parser.add_argument("--input-txt", default = "english_words.txt", help="Text file containing one word per line")
+    parser.add_argument("--output-json", default = "english_dictionary.json", help="Output JSON file")
     parser.add_argument(
         "--max-senses",
         type=int,

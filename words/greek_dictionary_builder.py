@@ -70,12 +70,15 @@ def build_status(translation: str | None) -> str:
 
 def main():
     parser = argparse.ArgumentParser()
+
     parser.add_argument(
-        "input_txt",
+        "--input-txt",
+        default="greek_words.txt",
         help="Text file containing one Greek word per line",
     )
     parser.add_argument(
-        "output_json",
+        "--output-json",
+        default = "greek_dictionary.json",
         help="Output JSON file",
     )
 
