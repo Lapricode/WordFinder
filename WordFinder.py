@@ -531,8 +531,146 @@ def ensure_nltk_ready():
         pass
 
 
-def normalize_word_key(word: str) -> str:
+def normalize_word(word: str) -> str:
     return word.strip().lower()
+
+
+def get_greek_translation(word: str) -> str | None:
+    return translate_text(word, "en", "el")
+
+
+def get_english_translation(word: str) -> str | None:
+    return translate_text(word, "el", "en")
+
+
+def build_status_en(senses, greek_translation):
+    has_meanings = bool(senses)
+    has_translation = bool(greek_translation and greek_translation.strip())
+    if has_meanings and has_translation:
+        return "ok"
+    if not has_meanings and not has_translation:
+        return "no_meanings_no_translation"
+    if not has_meanings:
+        return "no_meanings"
+    return "no_translation"
+
+
+def build_status_el(translation):
+    return "ok" if translation else "no_translation"
+
+
+def load_json_dict(path):
+    if not path or not os.path.exists(path):
+        return {}
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def save_json_atomic(path, data):
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def is_single_word(text: str) -> bool:
+    if not text:
+        return False
+    parts = text.strip().split()
+    return len(parts) == 1 and parts[0].isalpha()
+
+
+MULTI_WORD_NOTE = (
+    "Translation has multiple words; cannot match to a single English "
+    "dictionary entry."
+)
+
+
+def resolve_senses_for_translation(
+    english_translation: str | None,
+    english_dict: dict,
+    english_dict_path: str,
+    max_senses: int | None = None,
+):
+    if not english_translation or not english_translation.strip():
+        return [], "no_translation", None
+
+    if not is_single_word(english_translation):
+        return [], "multiple_words_translation", MULTI_WORD_NOTE
+
+    key = normalize_word(english_translation)
+    existing = english_dict.get(key)
+
+    if existing is not None and existing.get("senses"):
+        return existing["senses"], "ok", None
+
+    if existing is not None and "senses" in existing:
+        return [], "no_senses", None
+
+    senses = get_wordnet_senses(english_translation, max_senses)
+    greek_translation_back = get_greek_translation(english_translation)
+
+    english_dict[key] = {
+        "input_word": english_translation,
+        "greek_translation": greek_translation_back,
+        "senses": senses,
+        "status": build_status_en(senses, greek_translation_back),
+    }
+    save_json_atomic(english_dict_path, english_dict)
+
+    if senses:
+        return senses, "ok", None
+    return [], "no_senses", None
+
+
+def enrich_english_word(word, max_senses=None):
+    senses = get_wordnet_senses(word, max_senses)
+    greek_translation = get_greek_translation(word)
+    return {
+        "input_word": word,
+        "greek_translation": greek_translation,
+        "senses": senses,
+        "status": build_status_en(senses, greek_translation),
+    }
+
+
+def enrich_greek_word(
+    word,
+    english_dict=None,
+    english_dict_path=None,
+    max_senses=None,
+):
+    if english_dict is None or english_dict_path is None:
+        english_translation = get_english_translation(word)
+        return {
+            "input_word": word,
+            "english_translation": english_translation,
+            "status": build_status_el(english_translation),
+        }
+
+    english_translation = get_english_translation(word)
+    senses, status, note = resolve_senses_for_translation(
+        english_translation,
+        english_dict,
+        english_dict_path,
+        max_senses=max_senses,
+    )
+
+    entry = {
+        "input_word": word,
+        "english_translation": english_translation,
+        "senses": senses,
+        "status": status,
+    }
+    if note:
+        entry["senses_note"] = note
+    return entry
 
 
 def get_wordnet_senses(word: str, max_senses=None):
@@ -634,16 +772,6 @@ def enrich_english_word(word, max_senses=None):
     }
 
 
-def enrich_greek_word(word):
-    """Returns a dict entry matching greek_translations.json schema."""
-    english_translation = translate_text(word, "el", "en")
-    return {
-        "input_word": word,
-        "english_translation": english_translation,
-        "status": build_status_el(english_translation),
-    }
-
-
 # ══════════════════════════════════════════════════════════════════
 #  Pygame + fonts
 # ══════════════════════════════════════════════════════════════════
@@ -681,8 +809,10 @@ clock = pygame.time.Clock()
 
 pygame.font.init()
 
+
 def normalize_font_name(name: str) -> str:
     return name.lower().replace(" ", "").replace("-", "").replace("_", "")
+
 
 def pick_font(preferred):
     available = {normalize_font_name(f) for f in pygame.font.get_fonts()}
@@ -692,14 +822,21 @@ def pick_font(preferred):
             return key
     return "dejavusans"
 
+
 SYSTEM = platform.system()
 
 if SYSTEM == "Windows":
-    FONT_FAMILY = pick_font(["Segoe UI", "Arial", "DejaVu Sans", "Noto Sans", "Liberation Sans"])
+    FONT_FAMILY = pick_font(
+        ["Segoe UI", "Arial", "DejaVu Sans", "Noto Sans", "Liberation Sans"]
+    )
 elif SYSTEM == "Darwin":  # macOS
-    FONT_FAMILY = pick_font(["SF Pro Text", "Helvetica Neue", "Arial", "DejaVu Sans", "Noto Sans"])
+    FONT_FAMILY = pick_font(
+        ["SF Pro Text", "Helvetica Neue", "Arial", "DejaVu Sans", "Noto Sans"]
+    )
 else:  # Linux
-    FONT_FAMILY = pick_font(["DejaVu Sans", "Noto Sans", "Liberation Sans", "Arial","Segoe UI"])
+    FONT_FAMILY = pick_font(
+        ["DejaVu Sans", "Noto Sans", "Liberation Sans", "Arial", "Segoe UI"]
+    )
 
 FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
 FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)
@@ -818,7 +955,7 @@ PAD = 20
 GAP = 20
 
 H_HEADER = 65  # taller to fit two-line title
-H_CTRL = 100
+H_CTRL = 90
 H_FILES = 80
 H_TOP = H_HEADER + H_CTRL + H_FILES
 
@@ -897,7 +1034,9 @@ def draw_button(
     surface.blit(img, img.get_rect(center=draw_rect.center))
 
 
-def draw_nav_button(surface, rect, direction="left", color=None, hovered=False, enabled=True):
+def draw_nav_button(
+    surface, rect, direction="left", color=None, hovered=False, enabled=True
+):
     """Small triangular prev/next navigation button."""
     base = color if color is not None else ACCENT
     fg = lighten(base) if (hovered and enabled) else (base if enabled else BORDER)
@@ -1038,146 +1177,272 @@ class InfoModal:
     CONTENT = [
         (f"Word Finder {special_caracters["-"]} Instructions", "title"),
         ("", "gap"),
-
         ("Two Modes", "heading"),
-        ("The program has two search modes, switchable via the red button at the left "
-         "of the controls bar, or by pressing Tab:", "body"),
-        (f"Letter Match {special_caracters["-"]} classic slot-based filtering", "bullet"),
-        (f"Pattern Hunt {special_caracters["-"]} grid-based pattern filtering", "bullet"),
+        (
+            "The program has two search modes, switchable via the red button at the left "
+            "of the controls bar, or by pressing Tab:",
+            "body",
+        ),
+        (
+            f"Letter Match {special_caracters["-"]} classic slot-based filtering",
+            "bullet",
+        ),
+        (
+            f"Pattern Hunt {special_caracters["-"]} grid-based pattern filtering",
+            "bullet",
+        ),
         ("", "gap"),
-
         ("Letter Match", "heading"),
         ("Filters words by applying per-slot letter rules.", "body"),
-        (f"Three input modes (cycle with {special_caracters["^"]} {special_caracters["v"]} or click the pill toggle):", "body"),
-        (f"Valid {special_caracters["-"]} the selected letter group must appear in that slot.", "bullet"),
-        (f"Invalid {special_caracters["-"]} the selected letter group must not appear in that slot.", "bullet"),
-        (f"Exist {special_caracters["-"]} the letter must appear somewhere in the word. Repeating a letter in "
-         "Exist means it must occur multiple times.", "bullet"),
+        (
+            f"Three input modes (cycle with {special_caracters["^"]} {special_caracters["v"]} or click the pill toggle):",
+            "body",
+        ),
+        (
+            f"Valid {special_caracters["-"]} the selected letter group must appear in that slot.",
+            "bullet",
+        ),
+        (
+            f"Invalid {special_caracters["-"]} the selected letter group must not appear in that slot.",
+            "bullet",
+        ),
+        (
+            f"Exist {special_caracters["-"]} the letter must appear somewhere in the word. Repeating a letter in "
+            "Exist means it must occur multiple times.",
+            "bullet",
+        ),
         ("", "gap"),
         ("Navigation:", "body"),
-        (f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between slots (Valid/Invalid) or between Exist items.", "bullet"),
-        ("Backspace: in Valid/Invalid, clears the selected slot (or all slots if scope "
-         "is \"All\"). In Exist, deletes the currently selected Exist letter group.", "bullet"),
+        (
+            f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between slots (Valid/Invalid) or between Exist items.",
+            "bullet",
+        ),
+        (
+            "Backspace: in Valid/Invalid, clears the selected slot (or all slots if scope "
+            'is "All"). In Exist, deletes the currently selected Exist letter group.',
+            "bullet",
+        ),
         ("Type a letter: adds/removes constraint in current mode.", "bullet"),
         ("The active slot / exist area shows a highlighted border.", "bullet"),
         ("", "gap"),
         ("Slot / All scope (Shift+Space or pill toggle):", "body"),
-        (f"Slot {special_caracters["-"]} input affects only the selected slot.", "bullet"),
+        (
+            f"Slot {special_caracters["-"]} input affects only the selected slot.",
+            "bullet",
+        ),
         (f"All {special_caracters["-"]} input affects all slots at once.", "bullet"),
         ("", "gap"),
-        ("When word length increases, previously entered slot data is preserved. Data "
-         "is only removed when the word length shrinks past its position.", "body"),
+        (
+            "When word length increases, previously entered slot data is preserved. Data "
+            "is only removed when the word length shrinks past its position.",
+            "body",
+        ),
         ("Summary panel shows all current Letter Match constraints.", "body"),
         ("", "gap"),
-
         ("Pattern Hunt", "heading"),
-        ("Filters words by a 3x3 grid: rows are Start / Middle / End and columns are "
-         "Valid / Invalid / Exist.", "body"),
+        (
+            "Filters words by a 3x3 grid: rows are Start / Middle / End and columns are "
+            "Valid / Invalid / Exist.",
+            "body",
+        ),
         ("", "gap"),
         ("Navigation:", "body"),
-        (f"{special_caracters["^"]} {special_caracters["v"]} arrows: move between Start / Middle / End rows.", "bullet"),
-        (f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between the slots of a certain cell group.", "bullet"),
-        (f"Shift + {special_caracters["<"]} {special_caracters[">"]} arrows: move between Valid / Invalid / Exist columns.", "bullet"),
+        (
+            f"{special_caracters["^"]} {special_caracters["v"]} arrows: move between Start / Middle / End rows.",
+            "bullet",
+        ),
+        (
+            f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between the slots of a certain cell group.",
+            "bullet",
+        ),
+        (
+            f"Shift + {special_caracters["<"]} {special_caracters[">"]} arrows: move between Valid / Invalid / Exist columns.",
+            "bullet",
+        ),
         ("Click a slot to select it along with its cell group.", "bullet"),
-        ("Backspace deletes the current slot content; if the slot becomes empty, its "
-         "expand flag is also cleared.", "bullet"),
+        (
+            "Backspace deletes the current slot content; if the slot becomes empty, its "
+            "expand flag is also cleared.",
+            "bullet",
+        ),
         ("", "gap"),
         ("Cell behavior:", "body"),
-        (f"Valid {special_caracters["-"]} at least one pattern in the cell must match.", "bullet"),
-        (f"Invalid {special_caracters["-"]} no pattern in the cell may match.", "bullet"),
-        (f"Exist {special_caracters["-"]} every pattern in the cell must appear in the word.", "bullet"),
+        (
+            f"Valid {special_caracters["-"]} at least one pattern in the cell must match.",
+            "bullet",
+        ),
+        (
+            f"Invalid {special_caracters["-"]} no pattern in the cell may match.",
+            "bullet",
+        ),
+        (
+            f"Exist {special_caracters["-"]} every pattern in the cell must appear in the word.",
+            "bullet",
+        ),
         ("", "gap"),
         ("Pattern matching rows:", "body"),
-        (f"Start {special_caracters["-"]} sequence must match the beginning of the word.", "bullet"),
-        (f"Middle {special_caracters["-"]} sequence must appear anywhere in the word.", "bullet"),
-        (f"End {special_caracters["-"]} sequence must match the end of the word.", "bullet"),
+        (
+            f"Start {special_caracters["-"]} sequence must match the beginning of the word.",
+            "bullet",
+        ),
+        (
+            f"Middle {special_caracters["-"]} sequence must appear anywhere in the word.",
+            "bullet",
+        ),
+        (
+            f"End {special_caracters["-"]} sequence must match the end of the word.",
+            "bullet",
+        ),
         ("", "gap"),
-        ("Expanded matching (Ctrl+Space or the small corner button): Normal mode keeps "
-         "the typed sequence literal. Expanded mode shows and matches all accent/case "
-         "variants.", "body"),
-        ("The left/right and up/down arrows move between the grid cells, while the "
-         "selected cell keeps its own slot index.", "body"),
+        (
+            "Expanded matching (Ctrl+Space or the small corner button): Normal mode keeps "
+            "the typed sequence literal. Expanded mode shows and matches all accent/case "
+            "variants.",
+            "body",
+        ),
+        (
+            "The left/right and up/down arrows move between the grid cells, while the "
+            "selected cell keeps its own slot index.",
+            "body",
+        ),
         ("", "gap"),
-        ("Word length in Pattern Hunt: Drag the slider all the way left to set \"Word "
-         "Length: All\", which disables length filtering. The slider's left edge is "
-         "visually marked in red.", "body"),
+        (
+            'Word length in Pattern Hunt: Drag the slider all the way left to set "Word '
+            "Length: All\", which disables length filtering. The slider's left edge is "
+            "visually marked in red.",
+            "body",
+        ),
         ("", "gap"),
-        ("\"Patterns Review\" shows a summary of all current Pattern Hunt rules.", "body"),
+        (
+            '"Patterns Review" shows a summary of all current Pattern Hunt rules.',
+            "body",
+        ),
         ("", "gap"),
-
         ("Common Controls", "heading"),
         (f"Enter / Search button {special_caracters["-"]} run the search.", "bullet"),
         (f"Ctrl+S {special_caracters["-"]} save current results to file.", "bullet"),
-        (f"Page Up / Page Down {special_caracters["-"]} scroll through result pages.", "bullet"),
-        (f"Tab {special_caracters["-"]} toggle between Letter Match and Pattern Hunt.", "bullet"),
+        (
+            f"Page Up / Page Down {special_caracters["-"]} scroll through result pages.",
+            "bullet",
+        ),
+        (
+            f"Tab {special_caracters["-"]} toggle between Letter Match and Pattern Hunt.",
+            "bullet",
+        ),
         (f"Shift+Space {special_caracters["-"]} toggle Slot and All.", "bullet"),
-        (f"/ (slash) {special_caracters["-"]} switch between Greek and English word lists.", "bullet"),
-        (f"Ctrl+Space {special_caracters["-"]} expand / collapse Pattern Hunt slot(s).", "bullet"),
-        (f"Ctrl+I or the circular i button {special_caracters["-"]} open this instructions window.", "bullet"),
-        (f"Shift + / {special_caracters['-']} increase/decrease word length. In Pattern Hunt, "
-        "holding at 1 and pressing Shift+- switches to \"All\"; from \"All\", Shift++ returns to 1.", "bullet"),
+        (
+            f"/ (slash) {special_caracters["-"]} switch between Greek and English word lists.",
+            "bullet",
+        ),
+        (
+            f"Ctrl+Space {special_caracters["-"]} expand / collapse Pattern Hunt slot(s).",
+            "bullet",
+        ),
+        (
+            f"Ctrl+I or the circular i button {special_caracters["-"]} open this instructions window.",
+            "bullet",
+        ),
+        (
+            f"Shift + / {special_caracters['-']} increase/decrease word length. In Pattern Hunt, "
+            'holding at 1 and pressing Shift+- switches to "All"; from "All", Shift++ returns to 1.',
+            "bullet",
+        ),
         (f"Ctrl + / {special_caracters['-']} increase/decrease max preview.", "bullet"),
-        (f"+ / {special_caracters['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.", "bullet"),
+        (
+            f"+ / {special_caracters['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
+            "bullet",
+        ),
         ("", "gap"),
-
         ("Results panel:", "heading"),
-        (f"Left-click a word {special_caracters["-"]} mark it as \"to save\" (green).", "bullet"),
-        (f"Right-click a word {special_caracters["-"]} mark it as \"excluded\" (red).", "bullet"),
+        (
+            f'Left-click a word {special_caracters["-"]} mark it as "to save" (green).',
+            "bullet",
+        ),
+        (
+            f'Right-click a word {special_caracters["-"]} mark it as "excluded" (red).',
+            "bullet",
+        ),
         ("Click again to deselect.", "bullet"),
-        ("The count of marked/excluded words is shown in the results header.", "bullet"),
+        (
+            "The count of marked/excluded words is shown in the results header.",
+            "bullet",
+        ),
         ("Save writes all results (or only marked ones if any are marked).", "bullet"),
         ("", "gap"),
-
         ("Translations & Meanings", "heading"),
-        ("Two checkboxes in the file row control what appears in the results "
-         "hover tooltip:", "body"),
-        (f"Show translation {special_caracters["-"]} hovering a word shows "
-         f"[word] {special_caracters[">"]} [translation] using the saved "
-         "translation JSON files.", "bullet"),
-        (f"Show meaning {special_caracters["-"]} hovering a word shows its "
-         "part of speech, definition, and an example, pulled from the saved "
-         "meanings JSON file (English words only; Greek words show their "
-         "saved English translation instead, since dictionary senses are "
-         "English-only).", "bullet"),
+        (
+            "Two checkboxes in the file row control what appears in the results "
+            "hover tooltip:",
+            "body",
+        ),
+        (
+            f"Show translation {special_caracters["-"]} hovering a word shows "
+            f"[word] {special_caracters[">"]} [translation] using the saved "
+            "translation JSON files.",
+            "bullet",
+        ),
+        (
+            f"Show meaning {special_caracters["-"]} hovering a word shows its "
+            "part of speech, definition, and an example, pulled from the saved "
+            "meanings JSON file (English words only; Greek words show their "
+            "saved English translation instead, since dictionary senses are "
+            "English-only).",
+            "bullet",
+        ),
         ("", "gap"),
-        ("The Translate and Get Meaning buttons (next to the checkboxes) run "
-         "on the current results selection: if any words are marked to save "
-         "(green), only those are processed; otherwise every result except "
-         "excluded (red) words is processed.", "body"),
-        ("Both buttons show a progress window with a progress bar and a "
-         "running log of completed words while they work in the background, "
-         "and save results directly into the greek/english meanings JSON "
-         "files as they go.", "body"),
+        (
+            "The Translate and Get Meaning buttons (next to the checkboxes) run "
+            "on the current results selection: if any words are marked to save "
+            "(green), only those are processed; otherwise every result except "
+            "excluded (red) words is processed.",
+            "body",
+        ),
+        (
+            "Both buttons show a progress window with a progress bar and a "
+            "running log of completed words while they work in the background, "
+            "and save results directly into the greek/english meanings JSON "
+            "files as they go.",
+            "body",
+        ),
         ("", "gap"),
-
         ("Selection counts", "heading"),
-        ("The top of the results panel shows how many words are currently "
-         f"selected and excluded, e.g. \"12 words selected {special_caracters["[OK]"]}\" and \"3 words "
-         "excluded X\". This selection is shared by Save, Translate, and "
-         "Get Meaning.", "body"),
+        (
+            "The top of the results panel shows how many words are currently "
+            f'selected and excluded, e.g. "12 words selected {special_caracters["[OK]"]}" and "3 words '
+            'excluded X". This selection is shared by Save, Translate, and '
+            "Get Meaning.",
+            "body",
+        ),
         ("", "gap"),
-
         ("Word length per mode", "heading"),
-        ("Letter Match and Pattern Hunt each remember their own word length "
-         "independently, so switching between modes no longer changes the "
-         "other mode's word length setting.", "body"),
+        (
+            "Letter Match and Pattern Hunt each remember their own word length "
+            "independently, so switching between modes no longer changes the "
+            "other mode's word length setting.",
+            "body",
+        ),
         ("", "gap"),
-
         ("File path tooltips", "heading"),
-        ("Hover over any file path in the file row (Greek, English, Save to) "
-         "to see its full, untruncated path.", "body"),
+        (
+            "Hover over any file path in the file row (Greek, English, Save to) "
+            "to see its full, untruncated path.",
+            "body",
+        ),
         ("", "gap"),
-
         ("Theme:", "heading"),
-        ("The theme button shows \"Light\" when the light theme is active, and \"Dark\" "
-         "when the dark theme is active. Click to toggle.", "body"),
+        (
+            'The theme button shows "Light" when the light theme is active, and "Dark" '
+            "when the dark theme is active. Click to toggle.",
+            "body",
+        ),
         ("", "gap"),
-
         ("Language behavior:", "heading"),
-        ("Greek mode understands accented forms and common letter variants. English "
-         "mode groups uppercase and lowercase of the same letter.", "body"),
+        (
+            "Greek mode understands accented forms and common letter variants. English "
+            "mode groups uppercase and lowercase of the same letter.",
+            "body",
+        ),
         ("", "gap"),
-
         ("Press  Escape  or click anywhere to close.", "footer"),
     ]
 
@@ -1228,7 +1493,9 @@ class InfoModal:
 
         if event.type == pygame.MOUSEWHEEL:
             if panel.collidepoint(pygame.mouse.get_pos()):
-                self._scroll = max(0, min(self._max_scroll, self._scroll - event.y * 20))
+                self._scroll = max(
+                    0, min(self._max_scroll, self._scroll - event.y * 20)
+                )
 
     def _panel_rect(self, W, H):
         pw = min(720, W - 80)
@@ -1240,12 +1507,12 @@ class InfoModal:
         PAD_ = 28
         max_w = panel.width - PAD_ * 2
         line_spacing = {
-            "title":   (FONT_XL, 14),
+            "title": (FONT_XL, 14),
             "heading": (FONT_LG, 6),
-            "body":    (FONT_SM, 4),
-            "bullet":  (FONT_SM, 4),
-            "footer":  (FONT_SM, 4),
-            "gap":     (None,    10),
+            "body": (FONT_SM, 4),
+            "bullet": (FONT_SM, 4),
+            "footer": (FONT_SM, 4),
+            "gap": (None, 10),
         }
         h = 0
         for text, kind in self.CONTENT:
@@ -1298,15 +1565,17 @@ class InfoModal:
         y = panel.y + PAD_ - int(self._scroll)
 
         line_spacing = {
-            "title":   (FONT_XL, TEXT,   14),
+            "title": (FONT_XL, TEXT, 14),
             "heading": (FONT_LG, ACCENT, 6),
-            "body":    (FONT_SM, MUTED,  4),
-            "bullet":  (FONT_SM, TEXT,   4),
-            "footer":  (FONT_SM, MUTED,  4),
-            "gap":     (None,    None,   10),
+            "body": (FONT_SM, MUTED, 4),
+            "bullet": (FONT_SM, TEXT, 4),
+            "footer": (FONT_SM, MUTED, 4),
+            "gap": (None, None, 10),
         }
 
-        clip_rect = pygame.Rect(panel.x + 2, panel.y + 2, panel.width - 4, panel.height - 4)
+        clip_rect = pygame.Rect(
+            panel.x + 2, panel.y + 2, panel.width - 4, panel.height - 4
+        )
         old_clip = surface.get_clip()
         surface.set_clip(clip_rect)
 
@@ -1319,7 +1588,9 @@ class InfoModal:
             prefix = f"{special_caracters["*"]}  " if kind == "bullet" else ""
             for line in self._wrap(prefix + text, font, max_w - indent):
                 if panel.y <= y <= panel.y + panel.height:
-                    surface.blit(font.render(line, True, color), (content_x + indent, y))
+                    surface.blit(
+                        font.render(line, True, color), (content_x + indent, y)
+                    )
                 y += font.get_height() + extra_gap
 
         surface.set_clip(old_clip)
@@ -1408,7 +1679,9 @@ class ProgressModal:
                     self.close()
         if event.type == pygame.MOUSEWHEEL:
             if panel.collidepoint(pygame.mouse.get_pos()):
-                self._scroll = max(0, min(self._max_scroll_cache, self._scroll - event.y * 20))
+                self._scroll = max(
+                    0, min(self._max_scroll_cache, self._scroll - event.y * 20)
+                )
 
     def close(self):
         self.visible = False
@@ -1443,7 +1716,9 @@ class ProgressModal:
         pygame.draw.rect(surface, PANEL2, bar_rect, border_radius=8)
         fill_w = int(bar_w * pct)
         if fill_w > 0:
-            pygame.draw.rect(surface, GREEN, pygame.Rect(x, y, fill_w, bar_h), border_radius=8)
+            pygame.draw.rect(
+                surface, GREEN, pygame.Rect(x, y, fill_w, bar_h), border_radius=8
+            )
         pygame.draw.rect(surface, BORDER, bar_rect, 1, border_radius=8)
         pct_label = f"{done} / {total}  ({int(pct * 100)}%)"
         img = FONT_SM.render(pct_label, True, TEXT)
@@ -1462,7 +1737,11 @@ class ProgressModal:
         self._scroll = max(0, min(self._max_scroll_cache, self._scroll))
 
         old_clip = surface.get_clip()
-        surface.set_clip(pygame.Rect(log_rect.x + 2, log_rect.y + 2, log_rect.width - 4, log_rect.height - 4))
+        surface.set_clip(
+            pygame.Rect(
+                log_rect.x + 2, log_rect.y + 2, log_rect.width - 4, log_rect.height - 4
+            )
+        )
         ly = log_rect.y + 6 - int(self._scroll)
         for line in self.log_lines:
             if log_rect.y <= ly <= log_rect.bottom:
@@ -1474,14 +1753,19 @@ class ProgressModal:
         finished = self.job is None or (self.job.done_count >= self.job.total)
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
         if finished:
-            draw_button(surface, close_btn, "Close", ACCENT, WHITE, radius=7, font=FONT_MD)
+            draw_button(
+                surface, close_btn, "Close", ACCENT, WHITE, radius=7, font=FONT_MD
+            )
         else:
-            blit_text(surface, "Working…", FONT_SM, MUTED, panel.x + PAD_, panel.bottom - 38)
+            blit_text(
+                surface, "Working…", FONT_SM, MUTED, panel.x + PAD_, panel.bottom - 38
+            )
 
 
 # ══════════════════════════════════════════════════════════════════
 #  Background enrichment worker (runs in a thread, reports via queue)
 # ══════════════════════════════════════════════════════════════════
+
 
 class EnrichmentJob:
     """Runs Translate / Get Meaning over a word list on a background thread,
@@ -1491,7 +1775,7 @@ class EnrichmentJob:
     def __init__(self, job_kind, words, language):
         self.job_kind = job_kind  # "translate" | "meaning"
         self.words = list(words)
-        self.language = language  # "greek" | "english" (source language of the words)
+        self.language = language  # "greek" | "english"
         self.progress_queue = queue.Queue()
         self.total = len(self.words)
         self.done_count = 0
@@ -1512,58 +1796,58 @@ class EnrichmentJob:
                 if self.language == "greek"
                 else state.english_meanings_file
             )
-        else:
-            # meanings only make sense for English (WordNet); for Greek words
-            # we still store under the greek file with senses empty.
-            return (
-                state.greek_meanings_file
-                if self.language == "greek"
-                else state.english_meanings_file
-            )
+        return (
+            state.greek_meanings_file
+            if self.language == "greek"
+            else state.english_meanings_file
+        )
 
     def _run(self):
         path = self._target_path()
         data = load_json_dict(path)
+        english_dict_path = state.english_meanings_file
+        english_dict = load_json_dict(english_dict_path)
+
         if self.job_kind == "meaning" and self.language == "english":
             ensure_nltk_ready()
 
         for word in self.words:
             if self.cancelled:
                 break
-            key = normalize_word_key(word)
+
+            key = normalize_word(word)
             existing = data.get(key, {})
 
             try:
                 if self.language == "english":
-                    senses = existing.get("senses") if self.job_kind == "translate" else None
-                    greek_translation = existing.get("greek_translation")
-
                     if self.job_kind == "translate":
-                        greek_translation = translate_text(word, "en", "el")
                         senses = existing.get("senses", [])
-                    else:  # meaning
-                        senses = get_wordnet_senses(word)
-                        greek_translation = existing.get("greek_translation")
+                        greek_translation = get_greek_translation(word)
+                        data[key] = {
+                            "input_word": word,
+                            "greek_translation": greek_translation,
+                            "senses": senses,
+                            "status": build_status_en(senses, greek_translation),
+                        }
+                    else:
+                        data[key] = enrich_english_word(word)
 
-                    data[key] = {
-                        "input_word": word,
-                        "greek_translation": greek_translation,
-                        "senses": senses if senses is not None else existing.get("senses", []),
-                        "status": build_status_en(
-                            senses if senses is not None else existing.get("senses", []),
-                            greek_translation,
-                        ),
-                    }
                 else:
-                    # Greek source words: only have english_translation (no senses source)
-                    english_translation = existing.get("english_translation")
                     if self.job_kind == "translate":
-                        english_translation = translate_text(word, "el", "en")
-                    data[key] = {
-                        "input_word": word,
-                        "english_translation": english_translation,
-                        "status": build_status_el(english_translation),
-                    }
+                        english_translation = get_english_translation(word)
+                        senses = existing.get("senses", [])
+                        data[key] = {
+                            "input_word": word,
+                            "english_translation": english_translation,
+                            "senses": senses,
+                            "status": build_status_el(english_translation),
+                        }
+                    else:
+                        data[key] = enrich_greek_word(
+                            word,
+                            english_dict=english_dict,
+                            english_dict_path=english_dict_path,
+                        )
 
                 save_json_atomic(path, data)
                 self.progress_queue.put(("ok", word))
@@ -1575,10 +1859,192 @@ class EnrichmentJob:
         self.progress_queue.put(("done", None))
 
 
+class SearchJob:
+    def __init__(
+        self,
+        words,
+        finder_mode,
+        language,
+        word_length,
+        valid_sets=None,
+        invalid_sets=None,
+        exist_letters=None,
+        ph_word_length_all=False,
+        ph_slots=None,
+        ph_slot_count=None,
+        source_name="",
+    ):
+        self.words = list(words)
+        self.finder_mode = finder_mode
+        self.language = language
+        self.word_length = word_length
+        self.valid_sets = valid_sets or []
+        self.invalid_sets = invalid_sets or []
+        self.exist_letters = exist_letters or Counter()
+        self.ph_word_length_all = ph_word_length_all
+        self.ph_slots = ph_slots or {}
+        self.ph_slot_count = ph_slot_count or {}
+        self.source_name = source_name
+
+        self.progress_queue = queue.Queue()
+        self.total = len(self.words)
+        self.done_count = 0
+        self.cancelled = False
+        self.results = []
+        self._thread = None
+
+    def start(self):
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def cancel(self):
+        self.cancelled = True
+
+    def _word_matches(self, word: str) -> bool:
+        if self.finder_mode == "letter_match":
+            if len(word) != self.word_length:
+                return False
+
+            for pos, ch in enumerate(word):
+                if self.valid_sets[pos] and ch not in self.valid_sets[pos]:
+                    return False
+                if self.invalid_sets[pos] and ch in self.invalid_sets[pos]:
+                    return False
+
+            if self.exist_letters:
+                wc = Counter(word)
+                for key, needed in self.exist_letters.items():
+                    if self.language == "greek":
+                        group = GREEK_GROUP_BY_FIRST.get(key, (key,))
+                    elif self.language == "english":
+                        group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
+                    else:
+                        group = (key,)
+
+                    if sum(wc[ch] for ch in group) < needed:
+                        return False
+            return True
+
+        wl = None if self.ph_word_length_all else self.word_length
+        if wl is not None and len(word) != wl:
+            return False
+
+        rows = ["start", "middle", "end"]
+
+        def row_match(row_name, pat_info):
+            if row_name == "start":
+                return _pat_matches_start(word, pat_info, self.language)
+            if row_name == "middle":
+                return _pat_matches_middle(word, pat_info, self.language)
+            return _pat_matches_end(word, pat_info, self.language)
+
+        for row in rows:
+            valid_pats = [
+                p
+                for p in self.ph_slots[row]["valid"][: self.ph_slot_count[row]["valid"]]
+                if p["seq"]
+            ]
+            invalid_pats = [
+                p
+                for p in self.ph_slots[row]["invalid"][
+                    : self.ph_slot_count[row]["invalid"]
+                ]
+                if p["seq"]
+            ]
+            exist_pats = [
+                p
+                for p in self.ph_slots[row]["exist"][: self.ph_slot_count[row]["exist"]]
+                if p["seq"]
+            ]
+
+            if row == "start":
+                if not _check_start_exist(word, exist_pats):
+                    return False
+            elif row == "middle":
+                if not _check_middle_exist(word, exist_pats):
+                    return False
+            else:
+                if not _check_end_exist(word, exist_pats):
+                    return False
+
+            if valid_pats and not any(row_match(row, p) for p in valid_pats):
+                return False
+            if invalid_pats and any(row_match(row, p) for p in invalid_pats):
+                return False
+
+        return True
+
+    def _run(self):
+        try:
+            for word in self.words:
+                if self.cancelled:
+                    break
+                if self._word_matches(word):
+                    self.results.append(word)
+                self.done_count += 1
+            self.progress_queue.put(("done", self.results))
+        except Exception as e:
+            self.progress_queue.put(("error", str(e)))
+
+
+def poll_search_job():
+    job = state.search_job
+    if job is None:
+        return
+
+    try:
+        while True:
+            kind, payload = job.progress_queue.get_nowait()
+            if kind == "done":
+                state.search_results = payload
+                state.word_selections = {}
+                state.preview_start = 0
+                n = len(payload)
+                state.status = (
+                    f'{n} word{"s" if n != 1 else ""} matched in {job.source_name}'
+                )
+                state.search_job = None
+            elif kind == "error":
+                state.search_results = []
+                state.status = f"Search error: {payload}"
+                state.search_job = None
+    except queue.Empty:
+        pass
+
+
+def draw_search_progress_bar(surface, panel):
+    job = state.search_job
+    if job is None:
+        return 0
+
+    total = max(job.total, 1)
+    done = clamp(job.done_count, 0, total)
+    pct = done / total
+
+    bar_x = panel.x + PAD
+    bar_y = panel.y + 6
+    bar_w = panel.width - 2 * PAD
+    bar_h = 12
+
+    track = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
+    pygame.draw.rect(surface, PANEL2, track, border_radius=6)
+    pygame.draw.rect(surface, BORDER, track, 1, border_radius=6)
+
+    fill = pygame.Rect(bar_x, bar_y, int(bar_w * pct), bar_h)
+    if fill.width > 0:
+        pygame.draw.rect(surface, GREEN, fill, border_radius=6)
+
+    label = f"Searching… {int(pct * 100)}%"
+    img = FONT_SM.render(label, True, TEXT)
+    surface.blit(img, img.get_rect(center=track.center))
+
+    return bar_h + 12
+
+
 class AppState:
     def __init__(self):
-        self.lm_word_length = 5   # Letter Match's word length
-        self.ph_word_length = 5   # Pattern Hunt's word length (used when not "All")
+        self.lm_word_length = 5  # Letter Match's word length
+        self.ph_word_length = 5  # Pattern Hunt's word length (used when not "All")
         self.max_preview = MAX_MAX_PREVIEW // 2
         self.preview_start = 0
         self.input_scope = "single"
@@ -1590,7 +2056,9 @@ class AppState:
         self.show_meaning = True
         self.english_meanings_file = resource_path("words/english_dictionary.json")
         self.greek_meanings_file = resource_path("words/greek_dictionary.json")
-        self._translation_cache = {}  # (lang, word) -> loaded json dict (lazy, per active_file)
+        self._translation_cache = (
+            {}
+        )  # (lang, word) -> loaded json dict (lazy, per active_file)
 
         # ── Letter Match state ──
         self.input_mode = "valid"  # valid / invalid / exist
@@ -1623,6 +2091,7 @@ class AppState:
         self.ph_word_length_all = True
 
         self.search_results = []
+        self.search_job = None
         self.status = "Load a word list, then press Search or Enter."
         self.greek_file = resource_path("words/greek_words.txt")
         self.english_file = resource_path("words/english_words.txt")
@@ -1638,7 +2107,11 @@ class AppState:
         so every existing call site (`state.word_length`) keeps working
         without further edits, while Letter Match and Pattern Hunt each
         keep their own independent value."""
-        return self.ph_word_length if self.finder_mode == "pattern_hunt" else self.lm_word_length
+        return (
+            self.ph_word_length
+            if self.finder_mode == "pattern_hunt"
+            else self.lm_word_length
+        )
 
     @word_length.setter
     def word_length(self, value):
@@ -2027,31 +2500,51 @@ def do_search():
         state.search_results = []
         state.status = f"Load error: {e}"
         return
+
     if not words:
         state.search_results = []
-        state.status = f"No words loaded {special_caracters["-"]} check: {state.active_file()}"
+        state.status = (
+            f"No words loaded {special_caracters['-']} check: {state.active_file()}"
+        )
         return
 
+    if state.search_job is not None:
+        state.search_job.cancel()
+
     if state.finder_mode == "letter_match":
-        r = find_matching_words(
-            words,
-            state.word_length,
-            state.valid_sets,
-            state.invalid_sets,
-            state.exist_letters,
-            state.language,
+        search_job = SearchJob(
+            words=words,
+            finder_mode="letter_match",
+            language=state.language,
+            word_length=state.word_length,
+            valid_sets=[set(s) for s in state.valid_sets],
+            invalid_sets=[set(s) for s in state.invalid_sets],
+            exist_letters=Counter(state.exist_letters),
+            source_name=os.path.basename(state.active_file()),
         )
     else:
-        wl = None if state.ph_word_length_all else state.word_length
-        r = find_pattern_words_grid(
-            words, wl, state.ph_slots, state.ph_slot_count, state.language
+        search_job = SearchJob(
+            words=words,
+            finder_mode="pattern_hunt",
+            language=state.language,
+            word_length=state.word_length,
+            ph_word_length_all=state.ph_word_length_all,
+            ph_slots={
+                row: {
+                    col: [slot.copy() for slot in state.ph_slots[row][col]]
+                    for col in PH_COLS
+                }
+                for row in PH_ROWS
+            },
+            ph_slot_count={row: dict(state.ph_slot_count[row]) for row in PH_ROWS},
+            source_name=os.path.basename(state.active_file()),
         )
 
-    state.search_results = r
-    state.word_selections = {}
-    state.preview_start = 0
-    n = len(r)
-    state.status = f'{n} word{"s" if n != 1 else ""} matched in {os.path.basename(state.active_file())}'
+    state.search_job = search_job
+    state.status = (
+        f"Searching {len(words)} words in {os.path.basename(state.active_file())}…"
+    )
+    search_job.start()
 
 
 def do_save():
@@ -2100,7 +2593,9 @@ def do_translate_action():
     progress in progress_modal."""
     words = get_target_words()
     if not words:
-        state.status = f"Nothing to translate {special_caracters['-']} run Search first."
+        state.status = (
+            f"Nothing to translate {special_caracters['-']} run Search first."
+        )
         return
     job = EnrichmentJob("translate", words, state.language)
     progress_modal.start(job, f"Translating {len(words)} word(s)…")
@@ -2137,38 +2632,45 @@ def lookup_word_entry(word, language):
     """Returns the raw JSON entry dict for `word` in the given source
     language ('greek' or 'english'), or None if not found."""
     path = (
-        state.greek_meanings_file if language == "greek" else state.english_meanings_file
+        state.greek_meanings_file
+        if language == "greek"
+        else state.english_meanings_file
     )
     data = _get_cached_json(path)
-    return data.get(normalize_word_key(word))
+    return data.get(normalize_word(word))
 
 
 def format_meaning_lines(entry, language):
-    """Turns a JSON entry into a list of short display strings, nicely
-    presented (part of speech, definition, examples) per item 5's request."""
     lines = []
     senses_limit = 10
     if entry is None:
         return [f"No saved meaning yet {special_caracters['-']} use Get Meaning."]
 
-    if language == "english":
-        senses = entry.get("senses") or []
-        if not senses:
-            lines.append(f"No senses found {special_caracters['-']} try Get Meaning.")
-        else:
-            pos_names = {"n": "noun", "v": "verb", "a": "adjective", "s": "adjective", "r": "adverb"}
-            for i, sense in enumerate(senses[:senses_limit], 1):  # cap to keep tooltip readable
-                pos = pos_names.get(sense.get("part_of_speech", ""), sense.get("part_of_speech", "?"))
-                lines.append(f"{i}. ({pos}) {sense.get('definition', '')}")
-                for ex in (sense.get("examples") or [])[:1]:
-                    lines.append(f'    e.g. "{ex}"')
-            if len(senses) > senses_limit:
-                lines.append(f"…and {len(senses) - senses_limit} more sense(s)")
+    if language == "greek":
+        note = entry.get("senses_note")
+        if note:
+            lines.append(note)
+
+    senses = entry.get("senses") or []
+    if not senses:
+        lines.append(f"No senses found {special_caracters['-']} try Get Meaning.")
     else:
-        # Greek source words only carry an english_translation in their JSON,
-        # no WordNet-style senses (WordNet is English-only), so show that.
-        et = entry.get("english_translation")
-        lines.append(f"English translation: {et}" if et else "No translation saved yet.")
+        pos_names = {
+            "n": "noun",
+            "v": "verb",
+            "a": "adjective",
+            "s": "adjective",
+            "r": "adverb",
+        }
+        for i, sense in enumerate(senses[:senses_limit], 1):
+            pos = pos_names.get(
+                sense.get("part_of_speech", ""), sense.get("part_of_speech", "?")
+            )
+            definition = sense.get("definition", "")
+            examples = sense.get("examples") or []
+            lines.append(f"{i}. {pos}: {definition}")
+            for ex in examples[:1]:
+                lines.append(f"   eg: {ex}")
 
     return lines
 
@@ -2298,7 +2800,7 @@ def render_controls(mouse_pos):
     pygame.draw.line(screen, BORDER, (0, y0 + H_CTRL), (WIDTH, y0 + H_CTRL))
 
     btn_h = 0.6 * H_CTRL
-    
+
     # ── Column widths (fixed) ──────────────────────────────────────
     finder_btn_w = 150
     slider_col_w = 300
@@ -2332,30 +2834,55 @@ def render_controls(mouse_pos):
         pill_y_bottom = y0 + H_CTRL / 2 + (H_CTRL / 2 - pill_h) / 2
 
     # ── Finder Mode Button ──────────────────────────────────────────
-    finder_btn_rect = pygame.Rect(finder_x, y0 + (H_CTRL - btn_h) / 2, finder_btn_w, btn_h)
+    finder_btn_rect = pygame.Rect(
+        finder_x, y0 + (H_CTRL - btn_h) / 2, finder_btn_w, btn_h
+    )
     finder_lbl = (
         "Letter Match" if state.finder_mode == "letter_match" else "Pattern Hunt"
     )
     draw_button(
-        screen, finder_btn_rect, finder_lbl, RED, WHITE,
-        radius=8, hovered=finder_btn_rect.collidepoint(mouse_pos), font=FONT_MD,
+        screen,
+        finder_btn_rect,
+        finder_lbl,
+        RED,
+        WHITE,
+        radius=8,
+        hovered=finder_btn_rect.collidepoint(mouse_pos),
+        font=FONT_MD,
     )
 
     # ── Sliders (stacked within the slider column) ───────────────────
     sl_w = slider_col_w
-    cy1 = y0 + 0.1 * H_CTRL
-    cy2 = y0 + H_CTRL / 2 + 0.1 * H_CTRL
+    cy1 = y0 + 0.05 * H_FILES
+    cy2 = y0 + H_CTRL / 2
 
     is_all = state.finder_mode == "pattern_hunt" and state.ph_word_length_all
     active_word_length = (
-        state.ph_word_length if state.finder_mode == "pattern_hunt" else state.lm_word_length
+        state.ph_word_length
+        if state.finder_mode == "pattern_hunt"
+        else state.lm_word_length
     )
     t1, k1 = draw_slider(
-        screen, slider_x, cy1, sl_w, 1, MAX_WORD_LENGTH, active_word_length,
-        "Word length", show_all_marker=(state.finder_mode == "pattern_hunt"), is_all=is_all,
+        screen,
+        slider_x,
+        cy1,
+        sl_w,
+        1,
+        MAX_WORD_LENGTH,
+        active_word_length,
+        "Word length",
+        show_all_marker=(state.finder_mode == "pattern_hunt"),
+        is_all=is_all,
     )
     t2, k2 = draw_slider(
-        screen, slider_x, cy2, sl_w, 1, MAX_MAX_PREVIEW, state.max_preview, "Max preview"
+        screen,
+        slider_x,
+        cy2,
+        sl_w,
+        1,
+        MAX_MAX_PREVIEW,
+        state.max_preview,
+        "Max preview",
     )
 
     # ── Main mode pill toggle ───────────────────────────────────────
@@ -2370,7 +2897,11 @@ def render_controls(mouse_pos):
 
     m_rect = pygame.Rect(mode_x, pill_y_top, mode_w, pill_h)
     m_rects = draw_pill_toggle(
-        screen, m_rect, mode_labels, mode_idx, mode_colors,
+        screen,
+        m_rect,
+        mode_labels,
+        mode_idx,
+        mode_colors,
         hovered=m_rect.collidepoint(mouse_pos),
     )
 
@@ -2382,7 +2913,11 @@ def render_controls(mouse_pos):
         ph_col_colors = [GREEN, RED, BROWN]
         ph_col_idx = {"valid": 0, "invalid": 1, "exist": 2}[state.ph_col]
         ph_col_rects = draw_pill_toggle(
-            screen, ph_col_rect, ph_col_labels, ph_col_idx, ph_col_colors,
+            screen,
+            ph_col_rect,
+            ph_col_labels,
+            ph_col_idx,
+            ph_col_colors,
             hovered=ph_col_rect.collidepoint(mouse_pos),
         )
 
@@ -2392,27 +2927,48 @@ def render_controls(mouse_pos):
         state.input_scope if state.finder_mode == "letter_match" else state.ph_scope
     )
     scope_rects = draw_pill_toggle(
-        screen, scope_rect, ["Slot", "All"], 0 if active_scope == "single" else 1,
-        [ORANGE, ORANGE], hovered=scope_rect.collidepoint(mouse_pos),
+        screen,
+        scope_rect,
+        ["Slot", "All"],
+        0 if active_scope == "single" else 1,
+        [ORANGE, ORANGE],
+        hovered=scope_rect.collidepoint(mouse_pos),
     )
 
     # ── Language pill toggle ──────────────────────────────────────
     lang_rect = pygame.Rect(lang_x, pill_y_default, lang_w, pill_h)
     lang_rects = draw_pill_toggle(
-        screen, lang_rect, ["Greek", "English"], 0 if state.language == "greek" else 1,
-        [ACCENT, ACCENT], hovered=lang_rect.collidepoint(mouse_pos),
+        screen,
+        lang_rect,
+        ["Greek", "English"],
+        0 if state.language == "greek" else 1,
+        [ACCENT, ACCENT],
+        hovered=lang_rect.collidepoint(mouse_pos),
     )
 
     # ── Search button ─────────────────────────────────────────────
     search_rect = pygame.Rect(search_x, y0 + (H_CTRL - btn_h) / 2, search_w, btn_h)
     draw_button(
-        screen, search_rect, "Search", GREEN, WHITE,
-        hovered=search_rect.collidepoint(mouse_pos), font=FONT_LG,
+        screen,
+        search_rect,
+        "Search",
+        GREEN,
+        WHITE,
+        hovered=search_rect.collidepoint(mouse_pos),
+        font=FONT_LG,
     )
 
     return (
-        t1, k1, t2, k2, m_rects, scope_rects, lang_rects, search_rect,
-        finder_btn_rect, ph_col_rects,
+        t1,
+        k1,
+        t2,
+        k2,
+        m_rects,
+        scope_rects,
+        lang_rects,
+        search_rect,
+        finder_btn_rect,
+        ph_col_rects,
     )
 
 
@@ -2432,12 +2988,20 @@ def render_file_row(mouse_pos):
         path_img = LINK_FONT_SM.render(short_path(path), True, ACCENT)
         path_rect = path_img.get_rect(topleft=(tx, by + 2))
         screen.blit(path_img, path_rect)
-        blit_text(screen, f"{count} words", FONT_SM, MUTED, tx, by + 20, anchor="topleft")
+        blit_text(
+            screen, f"{count} words", FONT_SM, MUTED, tx, by + 20, anchor="topleft"
+        )
         hover_rect = pygame.Rect(tx, by, 126, 36)
 
         draw_button(
-            screen, br, label, DARK, WHITE, radius=7,
-            hovered=br.collidepoint(mouse_pos), font=FONT_MD,
+            screen,
+            br,
+            label,
+            DARK,
+            WHITE,
+            radius=7,
+            hovered=br.collidepoint(mouse_pos),
+            font=FONT_MD,
         )
 
         if hover_rect.collidepoint(mouse_pos) and path:
@@ -2466,7 +3030,15 @@ def render_file_row(mouse_pos):
         action_col_w -= width_remove
         save_w -= width_remove
         theme_w -= width_remove
-        col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
+        col_widths = [
+            unit_w,
+            unit_w,
+            unit_w,
+            action_col_w,
+            action_col_w,
+            save_w,
+            theme_w,
+        ]
 
     xs = distribute_columns(WIDTH, PAD, PAD, col_widths)
     greek_x, english_x, saveto_x, translate_x, meaning_x, save_x, theme_x = xs
@@ -2479,28 +3051,48 @@ def render_file_row(mouse_pos):
 
     def draw_checkbox(x, y, checked, label):
         box = pygame.Rect(x, y, chk_size, chk_size)
-        pygame.draw.rect(screen, (GREEN_BG if checked else PANEL2), box, border_radius=4)
-        pygame.draw.rect(screen, (GREEN if checked else BORDER), box, 2, border_radius=4)
+        pygame.draw.rect(
+            screen, (GREEN_BG if checked else PANEL2), box, border_radius=4
+        )
+        pygame.draw.rect(
+            screen, (GREEN if checked else BORDER), box, 2, border_radius=4
+        )
         if checked:
-            img = FONT_SM.render(special_caracters["[OK]"], True, GREEN)
+            img = FONT_LG.render(special_caracters["[OK]"], True, GREEN)
             screen.blit(img, img.get_rect(center=box.center))
         lbl_img = FONT_SM.render(label, True, TEXT)
         screen.blit(lbl_img, lbl_img.get_rect(midleft=(box.right + 8, box.centery)))
         return box
 
-    translate_chk_rect = draw_checkbox(translate_x, chk_y, state.show_translation, "Show Translation")
-    meaning_chk_rect = draw_checkbox(meaning_x, chk_y, state.show_meaning, "Show Meaning")
+    translate_chk_rect = draw_checkbox(
+        translate_x, chk_y, state.show_translation, "Show Translation"
+    )
+    meaning_chk_rect = draw_checkbox(
+        meaning_x, chk_y, state.show_meaning, "Show Meaning"
+    )
 
     translate_btn = pygame.Rect(translate_x, btn_y, action_col_w, action_btn_h)
     meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w, action_btn_h)
 
     draw_button(
-        screen, translate_btn, "Translate", PURPLE, WHITE, radius=7,
-        hovered=translate_btn.collidepoint(mouse_pos), font=FONT_MD,
+        screen,
+        translate_btn,
+        "Translate",
+        PURPLE,
+        WHITE,
+        radius=7,
+        hovered=translate_btn.collidepoint(mouse_pos),
+        font=FONT_MD,
     )
     draw_button(
-        screen, meaning_btn, "Get Meaning", PURPLE, WHITE, radius=7,
-        hovered=meaning_btn.collidepoint(mouse_pos), font=FONT_MD,
+        screen,
+        meaning_btn,
+        "Get Meaning",
+        PURPLE,
+        WHITE,
+        radius=7,
+        hovered=meaning_btn.collidepoint(mouse_pos),
+        font=FONT_MD,
     )
 
     # ── Theme + Save (right side) ───────────────────────────────────
@@ -2509,30 +3101,56 @@ def render_file_row(mouse_pos):
 
     sv_btn = pygame.Rect(save_x, btn_y2, save_w, btn_h2)
     draw_button(
-        screen, sv_btn, "Save", PURPLE, WHITE,
-        hovered=sv_btn.collidepoint(mouse_pos), font=FONT_LG,
+        screen,
+        sv_btn,
+        "Save",
+        PURPLE,
+        WHITE,
+        hovered=sv_btn.collidepoint(mouse_pos),
+        font=FONT_LG,
     )
 
     theme_btn = pygame.Rect(theme_x, btn_y2, theme_w, btn_h2)
     theme_label = "Light" if state.theme == "light" else "Dark"
     draw_button(
-        screen, theme_btn, theme_label, CYAN, WHITE, radius=7,
-        hovered=theme_btn.collidepoint(mouse_pos), font=FONT_MD,
+        screen,
+        theme_btn,
+        theme_label,
+        CYAN,
+        WHITE,
+        radius=7,
+        hovered=theme_btn.collidepoint(mouse_pos),
+        font=FONT_MD,
     )
 
     # ── Show Files buttons and paths ─────────────
 
-    sp_btn, sp_link = file_unit(saveto_x, "Save to", state.results_file, state.results_count)
-    ef_btn, ef_link = file_unit(english_x, "English", state.english_file, state.english_count)
+    sp_btn, sp_link = file_unit(
+        saveto_x, "Save to", state.results_file, state.results_count
+    )
+    ef_btn, ef_link = file_unit(
+        english_x, "English", state.english_file, state.english_count
+    )
     gf_btn, gf_link = file_unit(greek_x, "Greek", state.greek_file, state.greek_count)
 
     return (
-        gf_btn, gf_link, ef_btn, ef_link, sp_btn, sp_link, theme_btn, sv_btn,
-        translate_chk_rect, meaning_chk_rect, translate_btn, meaning_btn,
+        gf_btn,
+        gf_link,
+        ef_btn,
+        ef_link,
+        sp_btn,
+        sp_link,
+        theme_btn,
+        sv_btn,
+        translate_chk_rect,
+        meaning_chk_rect,
+        translate_btn,
+        meaning_btn,
     )
 
 
 # ─── Letter Match workspace ───────────────────────────────────────
+
 
 def _slot_layout():
     gap = 8
@@ -2566,7 +3184,11 @@ def format_exist_letters(counter):
             group = (key,)
         label = "".join(group)
         parts.append(f"{label} (x{count})" if count > 1 else label)
-    return f"  {special_caracters["*"]}  ".join(parts) if parts else f"{special_caracters["-"]}"
+    return (
+        f"  {special_caracters["*"]}  ".join(parts)
+        if parts
+        else f"{special_caracters["-"]}"
+    )
 
 
 def render_workspace_lm(mouse_pos):
@@ -2652,10 +3274,10 @@ def render_workspace_lm(mouse_pos):
     hover_pos = None
 
     lm_ui = {
-        "valid_cells": [],    # list of (position_index, rect)
+        "valid_cells": [],  # list of (position_index, rect)
         "invalid_cells": [],  # list of (position_index, rect)
-        "exist_chips": [],    # list of (exist_index, rect)
-        "exist_row": None,    # whole-row rect, clickable even with no chips
+        "exist_chips": [],  # list of (exist_index, rect)
+        "exist_row": None,  # whole-row rect, clickable even with no chips
     }
 
     for label, sets, bg_c, bdr_c, lbl_c, mode_str in [
@@ -2679,7 +3301,9 @@ def render_workspace_lm(mouse_pos):
             max_text_w = cell.width - 8
             display_letters = fit_text_with_ellipsis(letters, FONT_SM, max_text_w)
             img = FONT_SM.render(
-                display_letters or f"{special_caracters["-"]}", True, TEXT if letters else MUTED
+                display_letters or f"{special_caracters["-"]}",
+                True,
+                TEXT if letters else MUTED,
             )
             screen.blit(img, img.get_rect(center=cell.center))
 
@@ -2901,7 +3525,9 @@ def render_workspace_ph(mouse_pos):
                 pygame.draw.rect(
                     screen, PURPLE if expanded else BORDER, exp_btn, border_radius=3
                 )
-                e_img = FONT_SM.render(f"{special_caracters["~"]}", True, WHITE if expanded else MUTED)
+                e_img = FONT_SM.render(
+                    f"{special_caracters["~"]}", True, WHITE if expanded else MUTED
+                )
                 screen.blit(e_img, e_img.get_rect(center=exp_btn.center))
 
                 if sr.collidepoint(mouse_pos):
@@ -2943,6 +3569,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     panel = pygame.Rect(PAD, y0, WIDTH - 2 * PAD, h)
     draw_panel(screen, panel, PANEL, BORDER, radius=12)
 
+    progress_h = draw_search_progress_bar(screen, panel)
+
     n = len(state.search_results)
     if n:
         state.clamp_preview_start()
@@ -2952,34 +3580,48 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         start_index = 0
         end_index = 0
 
-    # Count selections
     n_save = sum(1 for v in state.word_selections.values() if v == "save")
     n_excl = sum(1 for v in state.word_selections.values() if v == "exclude")
     sel_parts = []
     if n_save:
-        sel_parts.append(f"{n_save} words selected {special_caracters["[OK]"]}")
+        sel_parts.append(f"{n_save} words selected {special_caracters['[OK]']}")
     if n_excl:
         sel_parts.append(f"{n_excl} words excluded X")
-    sel_str = "  |  " + f"  {special_caracters["*"]}  ".join(sel_parts) if sel_parts else ""
+    sel_str = (
+        "  |  " + f"  {special_caracters['*']}  ".join(sel_parts) if sel_parts else ""
+    )
 
-    blit_text(screen, state.status, FONT_SM, MUTED, panel.x + PAD, panel.y + 10)
+    top_y = panel.y + 10 + progress_h
+    blit_text(screen, state.status, FONT_SM, MUTED, panel.x + PAD, top_y)
 
-    cnt = f"{n} total  {special_caracters["*"]}  showing {start_index} - {end_index}"
+    cnt = f"{n} total  {special_caracters['*']}  showing {start_index} - {end_index}"
     cnt_w = FONT_SM.size(cnt)[0]
     nav_w, nav_h, nav_gap = 22, 20, 6
     group_w = nav_w * 2 + nav_gap * 2 + cnt_w
     group_x = panel.right - PAD - group_w
-    nav_y = panel.y + 8
+    nav_y = panel.y + 8 + progress_h
 
     prev_rect = pygame.Rect(group_x, nav_y, nav_w, nav_h)
     cnt_x = prev_rect.right + nav_gap
-    blit_text(screen, cnt, FONT_SM, ACCENT, cnt_x, panel.y + 10, anchor="topleft")
+    blit_text(screen, cnt, FONT_SM, ACCENT, cnt_x, top_y, anchor="topleft")
     next_rect = pygame.Rect(cnt_x + cnt_w + nav_gap, nav_y, nav_w, nav_h)
 
     can_prev = state.preview_start > 0
     can_next = n > 0 and (state.preview_start + state.max_preview) < n
-    draw_nav_button(screen, prev_rect, "left", hovered=prev_rect.collidepoint(mouse_pos), enabled=can_prev)
-    draw_nav_button(screen, next_rect, "right", hovered=next_rect.collidepoint(mouse_pos), enabled=can_next)
+    draw_nav_button(
+        screen,
+        prev_rect,
+        "left",
+        hovered=prev_rect.collidepoint(mouse_pos),
+        enabled=can_prev,
+    )
+    draw_nav_button(
+        screen,
+        next_rect,
+        "right",
+        hovered=next_rect.collidepoint(mouse_pos),
+        enabled=can_next,
+    )
 
     if sel_str:
         blit_text(
@@ -2988,7 +3630,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
             FONT_SM,
             PURPLE,
             panel.centerx,
-            panel.y + 10,
+            top_y,
             anchor="midtop",
         )
 
@@ -2996,15 +3638,15 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     if not preview:
         blit_text(
             screen,
-            f"No results yet {special_caracters["-"]} press Enter or click Search.",
+            f"No results yet {special_caracters['-']} press Enter or click Search.",
             FONT_MD,
             MUTED,
             panel.x + PAD,
-            panel.y + 36,
+            panel.y + 36 + progress_h,
         )
         return prev_rect, next_rect
 
-    grid_y = panel.y + 34
+    grid_y = panel.y + 34 + progress_h
     cols = max(1, (panel.width - 2 * PAD) // 250)
     cw = (panel.width - 2 * PAD - (cols - 1) * GAP) // cols
     ch_h = 26
@@ -3023,7 +3665,6 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         is_hovered = wr.collidepoint(mouse_pos)
         sel_state = state.word_selections.get(word)
 
-        # Background color based on selection
         if sel_state == "save":
             bg_color = GREEN_BG
             bdr_color = GREEN_BDR
@@ -3056,7 +3697,11 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
         if state.show_translation:
             tr = get_word_translation(hword, state.language)
-            tr_text = f"{hword} {special_caracters['>']} {tr}" if tr else f"{hword} {special_caracters['>']} (no translation yet)"
+            tr_text = (
+                f"{hword} {special_caracters['>']} {tr}"
+                if tr
+                else f"{hword} {special_caracters['>']} (no translation yet)"
+            )
             lines.append((tr_text, FONT_MD, ACCENT))
 
         if state.show_meaning:
@@ -3134,12 +3779,24 @@ if __name__ == "__main__":
             ph_col_rects,
         ) = render_controls(mouse_pos)
         (
-            gf_btn, gf_link, ef_btn, ef_link, sp_btn, sp_link, theme_btn, sv_btn,
-            translate_chk_rect, meaning_chk_rect, translate_btn, meaning_btn,
+            gf_btn,
+            gf_link,
+            ef_btn,
+            ef_link,
+            sp_btn,
+            sp_link,
+            theme_btn,
+            sv_btn,
+            translate_chk_rect,
+            meaning_chk_rect,
+            translate_btn,
+            meaning_btn,
         ) = render_file_row(mouse_pos)
 
         if state.finder_mode == "letter_match":
-            slot_w, slot_h, sx, ty, gap, tby, summary_btn, lm_ui = render_workspace_lm(mouse_pos)
+            slot_w, slot_h, sx, ty, gap, tby, summary_btn, lm_ui = render_workspace_lm(
+                mouse_pos
+            )
             _lm_slot_sx = sx
             _lm_slot_ty = ty
             _lm_slot_w = slot_w
@@ -3148,6 +3805,7 @@ if __name__ == "__main__":
         else:
             tby, summary_btn, _ph_slot_rects = render_workspace_ph(mouse_pos)
 
+        poll_search_job()
         page_prev_rect, page_next_rect = render_results(tby, mouse_pos)
         info_modal.draw(screen, WIDTH, HEIGHT)
         progress_modal.draw(screen, WIDTH, HEIGHT)
@@ -3221,11 +3879,17 @@ if __name__ == "__main__":
                             open_summary_window()
 
                     # PH column toggle (Valid/Invalid/Exist row under Start/Middle/End)
-                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "valid"
-                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "invalid"
-                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "exist"
 
                     # Translate / Meaning checkboxes
@@ -3307,7 +3971,9 @@ if __name__ == "__main__":
                     # Results page navigation buttons
                     elif page_prev_rect and page_prev_rect.collidepoint(mx, my):
                         if state.search_results:
-                            state.preview_start = max(0, state.preview_start - state.max_preview)
+                            state.preview_start = max(
+                                0, state.preview_start - state.max_preview
+                            )
                     elif page_next_rect and page_next_rect.collidepoint(mx, my):
                         if state.search_results:
                             state.preview_start = min(
@@ -3360,10 +4026,12 @@ if __name__ == "__main__":
                             # EXIST row (anywhere else in the bar, e.g. empty space or no chips yet)
                             if not clicked:
                                 exist_row = lm_ui.get("exist_row")
-                                if exist_row is not None and exist_row.collidepoint(mx, my):
+                                if exist_row is not None and exist_row.collidepoint(
+                                    mx, my
+                                ):
                                     state.input_mode = "exist"
                                     clicked = True
-                                    
+
                         else:
                             # PH grid clicks
                             clicked_ph = False
@@ -3474,7 +4142,7 @@ if __name__ == "__main__":
                     else:
                         ph_backspace()
                     refresh_summary_window()
-                
+
                 elif event.key == pygame.K_LEFT:
                     if state.finder_mode == "letter_match":
                         if state.input_mode == "exist":
@@ -3593,7 +4261,11 @@ if __name__ == "__main__":
                 elif event.key == pygame.K_i and (event.mod & pygame.KMOD_CTRL):
                     info_modal.show()
 
-                elif event.key in (pygame.K_EQUALS, pygame.K_PLUS) and (event.mod & pygame.KMOD_SHIFT) and not (event.mod & pygame.KMOD_CTRL):
+                elif (
+                    event.key in (pygame.K_EQUALS, pygame.K_PLUS)
+                    and (event.mod & pygame.KMOD_SHIFT)
+                    and not (event.mod & pygame.KMOD_CTRL)
+                ):
                     if state.finder_mode == "pattern_hunt" and state.ph_word_length_all:
                         state.ph_word_length_all = False
                         state.word_length = 1
@@ -3604,29 +4276,55 @@ if __name__ == "__main__":
                             state.rebuild_sets()
                     refresh_summary_window()
 
-                elif event.key == pygame.K_MINUS and (event.mod & pygame.KMOD_SHIFT) and not (event.mod & pygame.KMOD_CTRL):
-                    if state.finder_mode == "pattern_hunt" and state.word_length <= 1 and not state.ph_word_length_all:
+                elif (
+                    event.key == pygame.K_MINUS
+                    and (event.mod & pygame.KMOD_SHIFT)
+                    and not (event.mod & pygame.KMOD_CTRL)
+                ):
+                    if (
+                        state.finder_mode == "pattern_hunt"
+                        and state.word_length <= 1
+                        and not state.ph_word_length_all
+                    ):
                         state.ph_word_length_all = True
-                    elif not (state.finder_mode == "pattern_hunt" and state.ph_word_length_all):
+                    elif not (
+                        state.finder_mode == "pattern_hunt" and state.ph_word_length_all
+                    ):
                         if state.word_length > 1:
                             state.word_length -= 1
                             state.rebuild_sets()
                     refresh_summary_window()
 
-                elif event.key == pygame.K_EQUALS and (event.mod & pygame.KMOD_CTRL) and not (event.mod & pygame.KMOD_SHIFT):
+                elif (
+                    event.key == pygame.K_EQUALS
+                    and (event.mod & pygame.KMOD_CTRL)
+                    and not (event.mod & pygame.KMOD_SHIFT)
+                ):
                     state.max_preview = clamp(state.max_preview + 1, 1, MAX_MAX_PREVIEW)
-                    state.preview_start = clamp(state.preview_start, 0, max(len(state.search_results) - 1, 0))
+                    state.preview_start = clamp(
+                        state.preview_start, 0, max(len(state.search_results) - 1, 0)
+                    )
 
-                elif event.key == pygame.K_MINUS and (event.mod & pygame.KMOD_CTRL) and not (event.mod & pygame.KMOD_SHIFT):
+                elif (
+                    event.key == pygame.K_MINUS
+                    and (event.mod & pygame.KMOD_CTRL)
+                    and not (event.mod & pygame.KMOD_SHIFT)
+                ):
                     state.max_preview = clamp(state.max_preview - 1, 1, MAX_MAX_PREVIEW)
-                    state.preview_start = clamp(state.preview_start, 0, max(len(state.search_results) - 1, 0))
+                    state.preview_start = clamp(
+                        state.preview_start, 0, max(len(state.search_results) - 1, 0)
+                    )
 
-                elif event.key == pygame.K_EQUALS and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)):
+                elif event.key == pygame.K_EQUALS and not (
+                    event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)
+                ):
                     if state.finder_mode == "pattern_hunt":
                         ph_adjust_cell_count(1)
                         refresh_summary_window()
 
-                elif event.key == pygame.K_MINUS and not (event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)):
+                elif event.key == pygame.K_MINUS and not (
+                    event.mod & (pygame.KMOD_CTRL | pygame.KMOD_SHIFT)
+                ):
                     if state.finder_mode == "pattern_hunt":
                         ph_adjust_cell_count(-1)
                         refresh_summary_window()
