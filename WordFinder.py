@@ -1623,8 +1623,8 @@ class InfoModal:
 
 class ProgressModal:
     """Full-screen dimmed overlay showing progress of a running Translate /
-    Get Meaning job: a progress bar plus a scrolling log of completed words.
-    Styled consistently with InfoModal."""
+    Get Meaning job: a progress bar plus a scrolling log of completed words,
+    with the processed result shown next to each word."""
 
     def __init__(self):
         self.visible = False
@@ -1633,12 +1633,16 @@ class ProgressModal:
         self.log_lines = []
         self._scroll = 0
         self._max_scroll_cache = 0
+        self._dragging_sb = False
+        self._drag_offset = 0
 
     def start(self, job: "EnrichmentJob", title: str):
         self.job = job
         self.title = title
         self.log_lines = []
         self._scroll = 0
+        self._dragging_sb = False
+        self._drag_offset = 0
         self.visible = True
         job.start()
 
@@ -1647,36 +1651,118 @@ class ProgressModal:
         ph = min(560, H - 60)
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
 
+    def _log_rect(self, panel):
+        PAD_ = 24
+        x = panel.x + PAD_
+        y = panel.y + PAD_
+        y += FONT_LG.get_linesize() + 10
+        y += 22 + 16
+        return pygame.Rect(x, y, panel.width - PAD_ * 2, panel.bottom - y - 60)
+
+    def _content_height(self, panel):
+        log_rect = self._log_rect(panel)
+        max_w = log_rect.width - 16
+        line_h = FONT_SM.get_linesize() + 3
+        total_h = 0
+
+        for raw in self.log_lines:
+            if raw == "":
+                total_h += line_h
+            else:
+                total_h += max(1, len(self._wrap(raw, FONT_SM, max_w))) * line_h
+
+        return total_h
+
+    def _scrollbar_rects(self, panel):
+        log_rect = self._log_rect(panel)
+        visible_h = log_rect.height - 12
+        total_h = self._content_height(panel)
+        self._max_scroll_cache = max(0, total_h - visible_h)
+
+        if total_h <= visible_h:
+            return None, None
+
+        track = pygame.Rect(panel.right - 16, panel.y + 12, 6, panel.height - 24)
+        ratio = visible_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * self._scroll / max(1, self._max_scroll_cache)
+        )
+        thumb = pygame.Rect(track.x, thumb_y, 6, thumb_h)
+        return track, thumb
+
     def poll(self):
-        """Drain the job's progress queue; call once per frame."""
+        """Drain the job's queue once per frame."""
         if not self.visible or self.job is None:
             return
+
         try:
             while True:
                 kind, payload = self.job.progress_queue.get_nowait()
-                if kind == "ok":
-                    self.log_lines.append(f"{special_caracters['[OK]']} {payload}")
+
+                if kind == "result":
+                    word = payload["word"]
+                    entry = payload["entry"]
+                    job_kind = payload["job_kind"]
+                    language = payload["language"]
+
+                    self.log_lines.append(f"{special_caracters['[OK]']} {word}")
+                    for line in format_progress_result_lines(job_kind, entry, language):
+                        self.log_lines.append(f"{special_caracters['>']} {line}")
+                    self.log_lines.append("")
+
                 elif kind == "error":
                     self.log_lines.append(f"X {payload}")
+                    self.log_lines.append("")
+
                 elif kind == "done":
                     self.log_lines.append(f"{special_caracters['[OK]']} Finished.")
+
         except queue.Empty:
             pass
 
     def handle_event(self, event, W, H):
         if not self.visible:
             return
+
         panel = self._panel_rect(W, H)
-        # Escape only closes if the job has finished (avoid losing progress silently)
+        finished = self.job is None or (self.job.done_count >= self.job.total)
+
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
-            if self.job is None or (self.job.done_count >= self.job.total):
+            if finished:
                 self.close()
             return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
-            if close_btn.collidepoint(event.pos):
-                if self.job is None or (self.job.done_count >= self.job.total):
+            # Click outside closes only after the job is done
+            if not panel.collidepoint(event.pos):
+                if finished:
                     self.close()
+                return
+
+            track, thumb = self._scrollbar_rects(panel)
+            if thumb and thumb.collidepoint(event.pos):
+                self._dragging_sb = True
+                self._drag_offset = event.pos[1] - thumb.y
+                return
+
+            close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
+            if finished and close_btn.collidepoint(event.pos):
+                self.close()
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_sb:
+            track, thumb = self._scrollbar_rects(panel)
+            if track and thumb:
+                new_y = event.pos[1] - self._drag_offset
+                max_thumb_y = track.y + track.height - thumb.height
+                ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+                self._scroll = max(
+                    0, min(self._max_scroll_cache, ratio * self._max_scroll_cache)
+                )
+
         if event.type == pygame.MOUSEWHEEL:
             if panel.collidepoint(pygame.mouse.get_pos()):
                 self._scroll = max(
@@ -1686,10 +1772,13 @@ class ProgressModal:
     def close(self):
         self.visible = False
         self.job = None
+        self._dragging_sb = False
+        self._drag_offset = 0
 
     def draw(self, surface, W, H):
         if not self.visible:
             return
+
         self.poll()
 
         overlay = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -1703,6 +1792,7 @@ class ProgressModal:
         PAD_ = 24
         x = panel.x + PAD_
         y = panel.y + PAD_
+
         blit_text(surface, self.title, FONT_LG, TEXT, x, y)
         y += FONT_LG.get_linesize() + 10
 
@@ -1732,7 +1822,7 @@ class ProgressModal:
 
         line_h = FONT_SM.get_linesize() + 3
         visible_h = log_rect.height - 12
-        total_h = len(self.log_lines) * line_h
+        total_h = self._content_height(panel)
         self._max_scroll_cache = max(0, total_h - visible_h)
         self._scroll = max(0, min(self._max_scroll_cache, self._scroll))
 
@@ -1742,13 +1832,33 @@ class ProgressModal:
                 log_rect.x + 2, log_rect.y + 2, log_rect.width - 4, log_rect.height - 4
             )
         )
+
         ly = log_rect.y + 6 - int(self._scroll)
-        for line in self.log_lines:
-            if log_rect.y <= ly <= log_rect.bottom:
-                color = RED if line.startswith("X") else MUTED
-                surface.blit(FONT_SM.render(line, True, color), (log_rect.x + 8, ly))
-            ly += line_h
+        for raw_line in self.log_lines:
+            if raw_line == "":
+                ly += line_h
+                continue
+
+            if raw_line.startswith("X"):
+                color = RED
+            elif raw_line.startswith(special_caracters["[OK]"]):
+                color = ACCENT
+            else:
+                color = MUTED
+
+            for line in self._wrap(raw_line, FONT_SM, log_rect.width - 16):
+                if log_rect.y <= ly <= log_rect.bottom:
+                    surface.blit(
+                        FONT_SM.render(line, True, color), (log_rect.x + 8, ly)
+                    )
+                ly += line_h
+
         surface.set_clip(old_clip)
+
+        track, thumb = self._scrollbar_rects(panel)
+        if track:
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
 
         finished = self.job is None or (self.job.done_count >= self.job.total)
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
@@ -1760,6 +1870,24 @@ class ProgressModal:
             blit_text(
                 surface, "Working…", FONT_SM, MUTED, panel.x + PAD_, panel.bottom - 38
             )
+
+    @staticmethod
+    def _wrap(text, font, max_w):
+        if not text:
+            return [""]
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            test = (current + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -1849,8 +1977,52 @@ class EnrichmentJob:
                             english_dict_path=english_dict_path,
                         )
 
+                if self.language == "english":
+                    if self.job_kind == "translate":
+                        senses = existing.get("senses", [])
+                        greek_translation = get_greek_translation(word)
+                        entry = {
+                            "input_word": word,
+                            "greek_translation": greek_translation,
+                            "senses": senses,
+                            "status": build_status_en(senses, greek_translation),
+                        }
+                        data[key] = entry
+                    else:
+                        entry = enrich_english_word(word)
+                        data[key] = entry
+                else:
+                    if self.job_kind == "translate":
+                        english_translation = get_english_translation(word)
+                        senses = existing.get("senses", [])
+                        entry = {
+                            "input_word": word,
+                            "english_translation": english_translation,
+                            "senses": senses,
+                            "status": build_status_el(english_translation),
+                        }
+                        data[key] = entry
+                    else:
+                        entry = enrich_greek_word(
+                            word,
+                            english_dict=english_dict,
+                            english_dict_path=english_dict_path,
+                        )
+                        data[key] = entry
+
                 save_json_atomic(path, data)
-                self.progress_queue.put(("ok", word))
+                self.progress_queue.put(
+                    (
+                        "result",
+                        {
+                            "word": word,
+                            "entry": entry,
+                            "job_kind": self.job_kind,
+                            "language": self.language,
+                        },
+                    )
+                )
+
             except Exception as e:
                 self.progress_queue.put(("error", f"{word}: {e}"))
 
@@ -2684,6 +2856,33 @@ def get_word_translation(word, language):
         return entry.get("greek_translation")
     else:
         return entry.get("english_translation")
+
+
+def format_progress_result_lines(job_kind, entry, language):
+    """
+    Returns the extra lines shown under each processed word in the progress modal.
+    - translate: just the translation line
+    - meaning: translation line (if available) + meaning lines
+    """
+    if entry is None:
+        return [f"No saved result yet {special_caracters['-']} use the button again."]
+
+    translation = (
+        entry.get("greek_translation")
+        if language == "english"
+        else entry.get("english_translation")
+    )
+
+    if job_kind == "translate":
+        if translation:
+            return [f"Translation {special_caracters['-']} {translation}"]
+        return [f"No translation found {special_caracters['-']} try Translate."]
+
+    lines = []
+    if translation:
+        lines.append(f"Translation {special_caracters['-']} {translation}")
+    lines.extend(format_meaning_lines(entry, language))
+    return lines
 
 
 def toggle_finder_mode():
@@ -3584,9 +3783,9 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     n_excl = sum(1 for v in state.word_selections.values() if v == "exclude")
     sel_parts = []
     if n_save:
-        sel_parts.append(f"{n_save} words selected {special_caracters['[OK]']}")
+        sel_parts.append(f"{n_save} word(s) selected {special_caracters['[OK]']}")
     if n_excl:
-        sel_parts.append(f"{n_excl} words excluded X")
+        sel_parts.append(f"{n_excl} word(s) excluded X")
     sel_str = (
         "  |  " + f"  {special_caracters['*']}  ".join(sel_parts) if sel_parts else ""
     )
