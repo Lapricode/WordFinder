@@ -385,25 +385,25 @@ def _check_end_exist(word, exist_pats):
 
 
 def _check_middle_exist(word, exist_pats):
-
     if not exist_pats:
         return True
+
+    # Strictly interior only: exclude first and last character positions.
+    interior = word[1:-1]
+    if not interior:
+        return False
 
     requirements = Counter()
 
     for pat in exist_pats:
-
         variants = tuple(sorted(_exist_variants(pat)))
-
         if variants:
             requirements[variants] += 1
 
     for variants, needed_count in requirements.items():
-
         found = 0
-
         for variant in variants:
-            found += word.count(variant)
+            found += interior.count(variant)
 
         if found < needed_count:
             return False
@@ -1039,9 +1039,12 @@ def draw_nav_button(
 ):
     """Small triangular prev/next navigation button."""
     base = color if color is not None else ACCENT
+    bg = lighten(PANEL2, 14) if (hovered and enabled) else PANEL2
     fg = lighten(base) if (hovered and enabled) else (base if enabled else BORDER)
-    pygame.draw.rect(surface, PANEL2, rect, border_radius=6)
+
+    pygame.draw.rect(surface, bg, rect, border_radius=6)
     pygame.draw.rect(surface, fg, rect, 2, border_radius=6)
+
     cx, cy = rect.center
     s = min(rect.width, rect.height) * 0.28
     if direction == "left":
@@ -1286,7 +1289,7 @@ class InfoModal:
             "bullet",
         ),
         (
-            f"Middle {special_caracters["-"]} sequence must appear anywhere in the word.",
+            f"Middle {special_caracters["-"]} sequence must appear strictly in the word's interior.",
             "bullet",
         ),
         (
@@ -1726,7 +1729,19 @@ class ProgressModal:
             return
 
         panel = self._panel_rect(W, H)
+        btn_y = panel.bottom - 44
+        action_btn_w = 85
+
         finished = self.job is None or (self.job.done_count >= self.job.total)
+        paused = bool(self.job and self.job.paused and not finished)
+
+        stop_btn = pygame.Rect(
+            (panel.left + panel.right - action_btn_w) / 2, btn_y, action_btn_w, 30
+        )
+        resume_btn = pygame.Rect(
+            (panel.left + panel.right - action_btn_w) / 2, btn_y, action_btn_w, 30
+        )
+        close_btn = pygame.Rect(panel.right - 96, btn_y, 72, 30)
 
         if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
             if finished:
@@ -1746,9 +1761,23 @@ class ProgressModal:
                 self._drag_offset = event.pos[1] - thumb.y
                 return
 
-            close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
-            if finished and close_btn.collidepoint(event.pos):
+            if self.job is not None and close_btn.collidepoint(event.pos):
+                self.job.cancel()
                 self.close()
+                return
+
+            if paused and self.job is not None and resume_btn.collidepoint(event.pos):
+                self.job.resume()
+                return
+
+            if (
+                (not finished)
+                and (not paused)
+                and self.job is not None
+                and stop_btn.collidepoint(event.pos)
+            ):
+                self.job.pause()
+                return
 
         if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
             self._dragging_sb = False
@@ -1775,7 +1804,7 @@ class ProgressModal:
         self._dragging_sb = False
         self._drag_offset = 0
 
-    def draw(self, surface, W, H):
+    def draw(self, surface, W, H, mouse_pos):
         if not self.visible:
             return
 
@@ -1861,15 +1890,70 @@ class ProgressModal:
             pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
 
         finished = self.job is None or (self.job.done_count >= self.job.total)
-        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 44, 72, 30)
+        paused = bool(self.job and self.job.paused and not finished)
+
+        btn_y = panel.bottom - 44
+        action_btn_w = 85
+
+        close_btn = pygame.Rect(panel.right - 96, btn_y, 72, 30)
+        action_btn = pygame.Rect(
+            (panel.left + panel.right - action_btn_w) / 2, btn_y, action_btn_w, 30
+        )
+
         if finished:
             draw_button(
-                surface, close_btn, "Close", ACCENT, WHITE, radius=7, font=FONT_MD
+                surface,
+                close_btn,
+                "Close",
+                ACCENT,
+                WHITE,
+                radius=7,
+                hovered=close_btn.collidepoint(mouse_pos),
+                font=FONT_MD,
+            )
+        elif paused:
+            draw_button(
+                surface,
+                action_btn,
+                "Resume",
+                PURPLE,
+                WHITE,
+                radius=7,
+                hovered=action_btn.collidepoint(mouse_pos),
+                font=FONT_MD,
+            )
+            draw_button(
+                surface,
+                close_btn,
+                "Close",
+                ACCENT,
+                WHITE,
+                radius=7,
+                hovered=close_btn.collidepoint(mouse_pos),
+                font=FONT_MD,
             )
         else:
-            blit_text(
-                surface, "Working…", FONT_SM, MUTED, panel.x + PAD_, panel.bottom - 38
+            draw_button(
+                surface,
+                action_btn,
+                "Stop",
+                RED,
+                WHITE,
+                radius=7,
+                hovered=action_btn.collidepoint(mouse_pos),
+                font=FONT_MD,
             )
+            draw_button(
+                surface,
+                close_btn,
+                "Close",
+                ACCENT,
+                WHITE,
+                radius=7,
+                hovered=close_btn.collidepoint(mouse_pos),
+                font=FONT_MD,
+            )
+            blit_text(surface, "Working…", FONT_SM, MUTED, panel.x + PAD_, btn_y)
 
     @staticmethod
     def _wrap(text, font, max_w):
@@ -1908,14 +1992,31 @@ class EnrichmentJob:
         self.total = len(self.words)
         self.done_count = 0
         self.cancelled = False
+        self.paused = False
+
+        # Event stays set while the worker is allowed to run.
+        self._run_event = threading.Event()
+        self._run_event.set()
+
         self._thread = None
 
     def start(self):
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
 
+    def pause(self):
+        self.paused = True
+        self._run_event.clear()
+
+    def resume(self):
+        if not self.cancelled and self.done_count < self.total:
+            self.paused = False
+            self._run_event.set()
+
     def cancel(self):
         self.cancelled = True
+        self.paused = False
+        self._run_event.set()
 
     def _target_path(self):
         if self.job_kind == "translate":
@@ -1939,44 +2040,16 @@ class EnrichmentJob:
         if self.job_kind == "meaning" and self.language == "english":
             ensure_nltk_ready()
 
-        for word in self.words:
+        for idx in range(self.done_count, self.total):
+            self._run_event.wait()  # blocks while paused
             if self.cancelled:
                 break
 
+            word = self.words[idx]
             key = normalize_word(word)
             existing = data.get(key, {})
 
             try:
-                if self.language == "english":
-                    if self.job_kind == "translate":
-                        senses = existing.get("senses", [])
-                        greek_translation = get_greek_translation(word)
-                        data[key] = {
-                            "input_word": word,
-                            "greek_translation": greek_translation,
-                            "senses": senses,
-                            "status": build_status_en(senses, greek_translation),
-                        }
-                    else:
-                        data[key] = enrich_english_word(word)
-
-                else:
-                    if self.job_kind == "translate":
-                        english_translation = get_english_translation(word)
-                        senses = existing.get("senses", [])
-                        data[key] = {
-                            "input_word": word,
-                            "english_translation": english_translation,
-                            "senses": senses,
-                            "status": build_status_el(english_translation),
-                        }
-                    else:
-                        data[key] = enrich_greek_word(
-                            word,
-                            english_dict=english_dict,
-                            english_dict_path=english_dict_path,
-                        )
-
                 if self.language == "english":
                     if self.job_kind == "translate":
                         senses = existing.get("senses", [])
@@ -2026,9 +2099,10 @@ class EnrichmentJob:
             except Exception as e:
                 self.progress_queue.put(("error", f"{word}: {e}"))
 
-            self.done_count += 1
+            self.done_count = idx + 1
 
-        self.progress_queue.put(("done", None))
+        if not self.cancelled and self.done_count >= self.total:
+            self.progress_queue.put(("done", None))
 
 
 class SearchJob:
@@ -3670,10 +3744,26 @@ def render_workspace_ph(mouse_pos):
 
             plus_r = pygame.Rect(cell.x + 2, cell.y + 3, 14, 14)
             minus_r = pygame.Rect(cell.x + 2, cell.y + cell.height - 17, 14, 14)
-            pygame.draw.rect(screen, GREEN_BG, plus_r, border_radius=4)
-            pygame.draw.rect(screen, RED_BG, minus_r, border_radius=4)
+
+            plus_hover = plus_r.collidepoint(mouse_pos)
+            minus_hover = minus_r.collidepoint(mouse_pos)
+
+            pygame.draw.rect(
+                screen,
+                lighten(GREEN_BG, 18) if plus_hover else GREEN_BG,
+                plus_r,
+                border_radius=4,
+            )
             pygame.draw.rect(screen, GREEN_BDR, plus_r, 1, border_radius=4)
+
+            pygame.draw.rect(
+                screen,
+                lighten(RED_BG, 18) if minus_hover else RED_BG,
+                minus_r,
+                border_radius=4,
+            )
             pygame.draw.rect(screen, RED_BDR, minus_r, 1, border_radius=4)
+
             blit_text(
                 screen,
                 "+",
@@ -3721,9 +3811,16 @@ def render_workspace_ph(mouse_pos):
                 screen.blit(img, img.get_rect(center=sr.center))
 
                 exp_btn = pygame.Rect(sr.right - 15, sr.top + 2, 12, 12)
+                exp_hover = exp_btn.collidepoint(mouse_pos)
+
+                base_exp_bg = PURPLE if expanded else BORDER
                 pygame.draw.rect(
-                    screen, PURPLE if expanded else BORDER, exp_btn, border_radius=3
+                    screen,
+                    lighten(base_exp_bg, 18) if exp_hover else base_exp_bg,
+                    exp_btn,
+                    border_radius=3,
                 )
+
                 e_img = FONT_SM.render(
                     f"{special_caracters["~"]}", True, WHITE if expanded else MUTED
                 )
@@ -4007,7 +4104,7 @@ if __name__ == "__main__":
         poll_search_job()
         page_prev_rect, page_next_rect = render_results(tby, mouse_pos)
         info_modal.draw(screen, WIDTH, HEIGHT)
-        progress_modal.draw(screen, WIDTH, HEIGHT)
+        progress_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
 
         if summary_win is not None and summary_win.winfo_exists():
             try:
