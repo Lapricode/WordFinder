@@ -216,3 +216,8 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+
+# My choices
+words/english_dictionary.json
+words/greek_dictionary.json
