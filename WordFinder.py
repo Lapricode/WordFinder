@@ -515,8 +515,10 @@ def resource_path(relative_path):
 # ══════════════════════════════════════════════════════════════════
 
 _NLTK_READY = False
+_TRANSLATOR_CACHE = {}
 _meanings_cache = {}  # path -> {"mtime": float, "data": dict}
 _results_legend_rects = {"toggle": None, "items": {}}
+ENRICHMENT_SAVE_EVERY_WORDS = 10  # 1 = save every word, higher = faster
 
 
 def ensure_nltk_ready():
@@ -540,8 +542,14 @@ def translate_text(word: str, source: str, target: str):
     """Generic translate wrapper; returns None on failure."""
     if GoogleTranslator is None:
         return None
-    try:
+
+    key = (source, target)
+    translator = _TRANSLATOR_CACHE.get(key)
+    if translator is None:
         translator = GoogleTranslator(source=source, target=target)
+        _TRANSLATOR_CACHE[key] = translator
+
+    try:
         return translator.translate(word)
     except Exception:
         return None
@@ -1457,14 +1465,14 @@ class InfoModal:
             "body",
         ),
         ("", "gap"),
-        ("Theme:", "heading"),
+        ("Theme", "heading"),
         (
             'The theme button shows "Light" when the light theme is active, and "Dark" '
             "when the dark theme is active. Click to toggle.",
             "body",
         ),
         ("", "gap"),
-        ("Language behavior:", "heading"),
+        ("Language behavior", "heading"),
         (
             "Greek mode understands accented forms and common letter variants. English "
             "mode groups uppercase and lowercase of the same letter.",
@@ -2013,8 +2021,15 @@ class EnrichmentModal:
         self.fields = {}
         self.drafts = {}
         self._rects = {}
+        self.word_scroll = 0
+        self.applying = False
+        self.apply_items = []
+        self.apply_done = 0
+        self.apply_total = 0
+        self.apply_label = ""
 
     def open_choice(self, job_kind):
+        progress_modal.close()
         self.visible = True
         self.stage = "choice"
         self.job_kind = job_kind
@@ -2023,12 +2038,14 @@ class EnrichmentModal:
         self.active_field = None
         self.fields = {}
         self.drafts = {}
-        pygame.key.stop_text_input()
+        self._rects = {}
+        self.word_scroll = 0
 
     def open_manual(self, job_kind):
+        progress_modal.close()
         words = get_target_words()
         if not words:
-            state.status = f"Nothing to edit {special_chars['-']} run Search first."
+            state.status = f"Nothing to edit {special_chars['-']} search results are empty."
             return
 
         self.visible = True
@@ -2042,6 +2059,7 @@ class EnrichmentModal:
         self.drafts = {}
         pygame.key.start_text_input()
         self._load_current()
+        self.word_scroll = 0
 
     def close(self):
         self.visible = False
@@ -2055,6 +2073,11 @@ class EnrichmentModal:
         self.fields = {}
         self.drafts = {}
         pygame.key.stop_text_input()
+        self.applying = False
+        self.apply_items = []
+        self.apply_done = 0
+        self.apply_total = 0
+        self.apply_label = ""
 
     def _path(self):
         return state.english_meanings_file if self.language == "english" else state.greek_meanings_file
@@ -2086,13 +2109,17 @@ class EnrichmentModal:
         else:
             senses = entry.get("senses") or []
             first = senses[0] if senses else {}
-            exs = first.get("examples") or []
+            second = senses[1] if len(senses) > 1 else {}
+            third = senses[2] if len(senses) > 2 else {}
+
             self.fields = {
                 "pos": first.get("part_of_speech", ""),
-                "definition": first.get("definition", ""),
-                "ex1": exs[0] if len(exs) > 0 else "",
-                "ex2": exs[1] if len(exs) > 1 else "",
-                "ex3": exs[2] if len(exs) > 2 else "",
+                "def1": first.get("definition", ""),
+                "def2": second.get("definition", ""),
+                "def3": third.get("definition", ""),
+                "ex1": (first.get("examples") or [""])[0] if first.get("examples") else "",
+                "ex2": (first.get("examples") or ["", ""])[1] if len(first.get("examples") or []) > 1 else "",
+                "ex3": (first.get("examples") or ["", "", ""])[2] if len(first.get("examples") or []) > 2 else "",
             }
             self.active_field = "pos"
 
@@ -2106,7 +2133,9 @@ class EnrichmentModal:
         else:
             self.drafts[word] = {
                 "pos": self.fields.get("pos", ""),
-                "definition": self.fields.get("definition", ""),
+                "def1": self.fields.get("def1", ""),
+                "def2": self.fields.get("def2", ""),
+                "def3": self.fields.get("def3", ""),
                 "ex1": self.fields.get("ex1", ""),
                 "ex2": self.fields.get("ex2", ""),
                 "ex3": self.fields.get("ex3", ""),
@@ -2117,7 +2146,9 @@ class EnrichmentModal:
         if not word:
             return
 
+        # Keep edits in memory only.
         self._snapshot_current()
+        state.status = f"Staged {self.job_kind} for {word} (not saved yet)"
 
         if self.job_kind == "translation":
             entry = save_manual_translation(word, self.fields.get("translation", ""), self.language)
@@ -2125,7 +2156,11 @@ class EnrichmentModal:
             entry = save_manual_meaning(
                 word,
                 self.fields.get("pos", ""),
-                self.fields.get("definition", ""),
+                [
+                    self.fields.get("def1", ""),
+                    self.fields.get("def2", ""),
+                    self.fields.get("def3", ""),
+                ],
                 [
                     self.fields.get("ex1", ""),
                     self.fields.get("ex2", ""),
@@ -2134,42 +2169,102 @@ class EnrichmentModal:
                 self.language,
             )
 
-        # Keep the visible results in sync immediately.
         state.results_cache_dirty = True
         rebuild_results_cache()
         refresh_visible_results()
-
         state.status = f"Saved manual {self.job_kind} for {word}"
         return entry
 
+    def _apply_all(self):
+        self._snapshot_current()
+        self.apply_items = list(self.drafts.items())
+        if not self.apply_items:
+            state.status = "Nothing to apply."
+            return
+
+        self.apply_total = len(self.apply_items)
+        self.apply_done = 0
+        self.applying = True
+        self.apply_label = f"Applying {self.apply_total} word(s)…"
+
+    def _apply_step(self, batch=1):
+        if not self.applying:
+            return
+
+        for _ in range(batch):
+            if not self.apply_items:
+                break
+
+            word, draft = self.apply_items.pop(0)
+            if self.job_kind == "translation":
+                save_manual_translation(word, draft.get("translation", ""), self.language)
+            else:
+                save_manual_meaning(
+                    word,
+                    draft.get("pos", ""),
+                    [draft.get("def1", ""), draft.get("def2", ""), draft.get("def3", "")],
+                    [draft.get("ex1", ""), draft.get("ex2", ""), draft.get("ex3", "")],
+                    self.language,
+                )
+            self.apply_done += 1
+
+        if not self.apply_items:
+            self.applying = False
+            self.apply_label = f"Applied {self.apply_done} word(s)."
+            state.status = self.apply_label
+            state.results_cache_dirty = True
+            rebuild_results_cache()
+            refresh_visible_results()
+        
     def _panel_rect(self, W, H):
-        pw = min(760, W - 100)
-        ph = min(640, H - 80)
+        if self.stage == "choice":
+            pw = min(420, W - 120)
+            ph = min(170, H - 120)
+        elif self.job_kind == "translation":
+            pw = min(760, W - 80)
+            ph = min(400, H - 80)
+        else:
+            pw = min(820, W - 80)
+            ph = min(560, H - 80)
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
 
-    def _word_item_rects(self, panel):
+    def _word_button_rects(self, panel):
         if not self.words:
             return []
 
-        sel_h = 24
-        list_x = panel.x + 24
-        list_y = panel.y + 72
-        list_w = 240
-        max_items = 5
-        start = clamp(self.dropdown_scroll, 0, max(0, len(self.words) - max_items))
-        end = min(len(self.words), start + max_items)
+        left = panel.x + 24
+        top = panel.y + 75
+        gap_x = 12
+        gap_y = 10
+        btn_h = 30
+        btn_w = 140
+        cols = max(2, (panel.width - 48 + gap_x) // (btn_w + gap_x))
+        rows = 1
+        per_page = cols * rows
+        start = clamp(self.word_scroll, 0, max(0, len(self.words) - per_page))
         rects = []
-        for i, word in enumerate(self.words[start:end], start=start):
-            r = pygame.Rect(list_x, list_y + (i - start) * (sel_h + 4), list_w, sel_h)
+
+        for i, word in enumerate(self.words[start:start + per_page], start=start):
+            row = (i - start) // cols
+            col = (i - start) % cols
+            r = pygame.Rect(
+                left + col * (btn_w + gap_x),
+                top + row * (btn_h + gap_y),
+                btn_w,
+                btn_h,
+            )
             rects.append((i, word, r))
+
         return rects
 
     def handle_event(self, event, W, H):
         if not self.visible:
             return False
 
+        if self.applying:
+            return True
+
         panel = self._panel_rect(W, H)
-        consumed = True
 
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_ESCAPE:
@@ -2181,7 +2276,7 @@ class EnrichmentModal:
                     if self.job_kind == "translation":
                         self.active_field = "translation"
                     else:
-                        order = ["pos", "definition", "ex1", "ex2", "ex3"]
+                        order = ["pos", "def1", "def2", "def3", "ex1", "ex2", "ex3"]
                         idx = order.index(self.active_field) if self.active_field in order else 0
                         self.active_field = order[(idx + 1) % len(order)]
                     return True
@@ -2209,11 +2304,17 @@ class EnrichmentModal:
                         return True
 
         if event.type == pygame.MOUSEWHEEL and self.stage == "manual":
-            if self.dropdown_open:
-                self.dropdown_scroll = clamp(
-                    self.dropdown_scroll - event.y,
+            panel = self._panel_rect(W, H)
+            if self.words:
+                btn_w = 150
+                btn_h = 26
+                gap = 8
+                cols = max(2, (panel.width - 48 + gap) // (btn_w + gap))
+                per_page = max(1, cols * 2)
+                self.word_scroll = clamp(
+                    self.word_scroll - event.y,
                     0,
-                    max(0, len(self.words) - 5),
+                    max(0, len(self.words) - per_page),
                 )
                 return True
 
@@ -2236,41 +2337,35 @@ class EnrichmentModal:
                         do_translate_action()
                     else:
                         do_get_meaning_action()
+
                 return True
 
-            # manual stage
-            selector = self._rects.get("selector")
-            if selector and selector.collidepoint(event.pos):
-                self.dropdown_open = not self.dropdown_open
-                return True
-
-            if self.dropdown_open:
-                for idx, word, r in self._word_item_rects(panel):
+            if self.stage == "manual":
+                for idx, word, r in self._word_button_rects(panel):
                     if r.collidepoint(event.pos):
                         self._snapshot_current()
                         self.word_index = idx
                         self._load_current()
-                        self.dropdown_open = False
                         return True
 
-            # field clicks
-            for key, r in self._rects.get("fields", {}).items():
-                if r.collidepoint(event.pos):
-                    self.active_field = key
+                for key, r in self._rects.get("fields", {}).items():
+                    if r.collidepoint(event.pos):
+                        self.active_field = key
+                        return True
+
+                apply_btn = self._rects.get("apply")
+                close_btn = self._rects.get("close")
+                if apply_btn and apply_btn.collidepoint(event.pos):
+                    self._apply_all()
+                    return True
+                if close_btn and close_btn.collidepoint(event.pos):
+                    self.close()
                     return True
 
-            apply_btn = self._rects.get("apply")
-            close_btn = self._rects.get("close")
-            if apply_btn and apply_btn.collidepoint(event.pos):
-                self._apply_current()
-                return True
-            if close_btn and close_btn.collidepoint(event.pos):
-                self.close()
                 return True
 
-            return True
+        return True
 
-        return consumed
 
     def draw(self, surface, W, H, mouse_pos):
         if not self.visible:
@@ -2289,96 +2384,194 @@ class EnrichmentModal:
 
             blit_text(
                 surface,
-                "Choose automatic lookup or manual entry.",
+                "Choose automatic lookup (Get) or manual entry (Set).",
                 FONT_SM,
                 MUTED,
                 panel.x + 24,
                 panel.y + 56,
             )
 
-            set_btn = pygame.Rect(panel.x + 24, panel.bottom - 62, 110, 30)
-            get_btn = pygame.Rect(panel.x + 146, panel.bottom - 62, 110, 30)
+            set_btn = pygame.Rect(panel.x + 24, panel.bottom - 54, 110, 30)
+            get_btn = pygame.Rect(panel.right - 134, panel.bottom - 54, 110, 30)
             self._rects = {"set": set_btn, "get": get_btn}
 
             draw_button(surface, set_btn, "Set", bg=TEAL, fg=WHITE, hovered=set_btn.collidepoint(mouse_pos), font=FONT_SM)
             draw_button(surface, get_btn, "Get", bg=ORANGE, fg=WHITE, hovered=get_btn.collidepoint(mouse_pos), font=FONT_SM)
             return
 
-        # manual stage
         title = "Manual Translation" if self.job_kind == "translation" else "Manual Meaning"
         blit_text(surface, title, FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+        blit_text(
+            surface,
+            "Click a word button to edit it. Enter saves the current word changes. Apply saves all edits.",
+            FONT_SM,
+            MUTED,
+            panel.x + 24,
+            panel.y + 48,
+        )
 
-        word_selector = pygame.Rect(panel.x + 24, panel.y + 70, 300, 30)
-        self._rects = {"selector": word_selector, "fields": {}, "apply": None, "close": None}
+        self._rects = {"fields": {}, "apply": None, "close": None}
 
-        field_y = panel.y + 130
-        field_h = 50
+        if self.applying:
+            self._apply_step(batch=1)
+
+        word_buttons = self._word_button_rects(panel)
+        for idx, word, r in word_buttons:
+            selected = idx == self.word_index
+            hovered = r.collidepoint(mouse_pos)
+
+            fill = BLUE_BG if selected else PANEL2
+            border = ACCENT if selected else BORDER
+            if hovered:
+                fill = lighten(fill, 12)
+                border = lighten(border, 12)
+
+            draw_panel(surface, r, fill, border, radius=8)
+            blit_text(
+                surface,
+                fit_text_with_ellipsis(word, FONT_SM, r.width - 10),
+                FONT_SM,
+                TEXT,
+                r.centerx,
+                r.centery,
+                anchor="center",
+            )
+
+        last_btn_bottom = max((r.bottom for _, _, r in word_buttons), default=panel.y + 130)
+        field_y = last_btn_bottom + 30
+        field_h = 30
         field_w = panel.width - 48
         left = panel.x + 24
 
-        def field(label, key, y, height=30):
-            blit_text(surface, label, FONT_SM, MUTED, left, y - 18)
+        def field(label, key, y, height=40):
+            blit_text(surface, label, FONT_SM, MUTED, left, y - 22)
             r = pygame.Rect(left, y, field_w, height)
             self._rects["fields"][key] = r
-            active = (self.active_field == key)
+            active = self.active_field == key
             draw_panel(surface, r, BLUE_BG if active else PANEL2, ACCENT if active else BORDER, radius=8)
             text = self.fields.get(key, "")
             txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 12)
             blit_text(surface, txt, FONT_SM, TEXT, r.x + 6, r.centery, anchor="midleft")
-            return r.bottom + 25
+            return r.bottom + 22
 
         if self.job_kind == "translation":
-            field_y = field("Translation", "translation", field_y)
+            field_y = field("Translation", "translation", field_y, field_h)
         else:
             field_y = field("Part of speech", "pos", field_y, field_h)
-            field_y = field("Definition", "definition", field_y, field_h)
+            field_y = field("Definition 1", "def1", field_y, field_h)
+            field_y = field("Definition 2", "def2", field_y, field_h)
+            field_y = field("Definition 3", "def3", field_y, field_h)
             field_y = field("Example 1", "ex1", field_y, field_h)
             field_y = field("Example 2", "ex2", field_y, field_h)
             field_y = field("Example 3", "ex3", field_y, field_h)
 
-        apply_btn = pygame.Rect(panel.x + 24, panel.bottom - 62, 110, 30)
-        close_btn = pygame.Rect(panel.right - 134, panel.bottom - 62, 110, 30)
+        bar_rect = pygame.Rect(panel.x + 24, panel.bottom - 65, panel.width - 48, 18)
+        if self.applying:
+            pct = self.apply_done / max(1, self.apply_total)
+            pygame.draw.rect(surface, PANEL2, bar_rect, border_radius=8)
+            fill_rect = pygame.Rect(bar_rect.x, bar_rect.y, int(bar_rect.width * pct), bar_rect.height)
+            if fill_rect.width > 0:
+                pygame.draw.rect(surface, GREEN, fill_rect, border_radius=8)
+            pygame.draw.rect(surface, BORDER, bar_rect, 1, border_radius=8)
+            blit_text(
+                surface,
+                f"{self.apply_done}/{self.apply_total}  ({int(100 * self.apply_done / self.apply_total)}%)",
+                FONT_SM,
+                TEXT,
+                bar_rect.centerx,
+                bar_rect.centery,
+                anchor="center",
+            )
+
+        apply_btn = pygame.Rect(panel.x + 24, panel.bottom - 40, 110, 30)
+        close_btn = pygame.Rect(panel.right - 134, panel.bottom - 40, 110, 30)
         self._rects["apply"] = apply_btn
         self._rects["close"] = close_btn
 
         draw_button(
             surface,
-            word_selector,
-            fit_text_with_ellipsis(self._current_word(), FONT_SM, word_selector.width - 20),
-            bg=BLUE_BG,
-            fg=TEXT,
-            hovered=word_selector.collidepoint(mouse_pos),
+            apply_btn,
+            "Applying…" if self.applying else "Apply",
+            bg=TEAL if self.applying else GREEN,
+            fg=WHITE,
+            hovered=apply_btn.collidepoint(mouse_pos) and not self.applying,
             font=FONT_SM,
         )
-
-        if self.dropdown_open:
-            items = self._word_item_rects(panel)
-            dd_h = min(5, len(items)) * 28
-            dd_rect = pygame.Rect(word_selector.x, word_selector.bottom + 4, word_selector.width, dd_h)
-            draw_panel(surface, dd_rect, PANEL2, BORDER, radius=10)
-
-            for idx, word, r in items:
-                rr = pygame.Rect(r.x, r.y + 32, r.width, r.height)
-                hovered = rr.collidepoint(mouse_pos)
-                pygame.draw.rect(surface, BLUE_BG if idx == self.word_index else PANEL, rr, border_radius=6)
-                pygame.draw.rect(surface, BORDER, rr, 1, border_radius=6)
-                blit_text(
-                    surface,
-                    fit_text_with_ellipsis(word, FONT_SM, rr.width - 10),
-                    FONT_SM,
-                    TEXT,
-                    rr.x + 6,
-                    rr.centery,
-                    anchor="midleft",
-                )
-
-        draw_button(surface, apply_btn, "Apply", bg=GREEN, fg=WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
-        draw_button(surface, close_btn, "Close", bg=RED, fg=WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=RED,
+            fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos) and not self.applying,
+            font=FONT_SM,
+        )
 
 
 # ══════════════════════════════════════════════════════════════════
 #  Background enrichment worker (runs in a thread, reports via queue)
 # ══════════════════════════════════════════════════════════════════
+
+
+def build_enrichment_entry(job_kind, language, word, existing):
+    """
+    Reuse already-known translation/meaning data when it is already present.
+    Translation jobs only fetch translation.
+    Meaning jobs only fetch meaning.
+    """
+    entry = dict(existing or {})
+    entry["input_word"] = word
+
+    if language == "english":
+        if job_kind == "translation":
+            greek_translation = entry.get("greek_translation")
+            if not greek_translation:
+                greek_translation = get_greek_translation(word)
+
+            senses = entry.get("senses")
+            if not isinstance(senses, list):
+                senses = []
+
+            entry["greek_translation"] = greek_translation
+            entry["senses"] = senses
+            entry["status"] = build_status(word, greek_translation, senses)
+            return entry
+
+        senses = entry.get("senses")
+        if not isinstance(senses, list) or not senses:
+            senses = get_wordnet_senses(word)
+
+        greek_translation = entry.get("greek_translation")
+        entry["greek_translation"] = greek_translation
+        entry["senses"] = senses
+        entry["status"] = build_status(word, greek_translation, senses)
+        return entry
+
+    if job_kind == "translation":
+        english_translation = entry.get("english_translation")
+        if not english_translation:
+            english_translation = get_english_translation(word)
+
+        senses = entry.get("senses")
+        if not isinstance(senses, list):
+            senses = []
+
+        entry["english_translation"] = english_translation
+        entry["senses"] = senses
+        entry["status"] = build_status(word, english_translation, senses)
+        return entry
+
+    english_translation = entry.get("english_translation")
+    senses = entry.get("senses")
+    if (not isinstance(senses, list) or not senses) and english_translation:
+        senses = get_wordnet_senses(english_translation)
+    elif not isinstance(senses, list):
+        senses = []
+
+    entry["english_translation"] = english_translation
+    entry["senses"] = senses
+    entry["status"] = build_status(word, english_translation, senses)
+    return entry
 
 
 class EnrichmentJob:
@@ -2438,6 +2631,7 @@ class EnrichmentJob:
         data = load_json_dict(path)
         english_dict_path = state.english_meanings_file
         english_dict = load_json_dict(english_dict_path)
+        pending_writes = 0
 
         if self.job_kind == "meaning" and self.language == "english":
             ensure_nltk_ready()
@@ -2452,41 +2646,53 @@ class EnrichmentJob:
             existing = data.get(key, {})
 
             try:
-                if self.language == "english":
-                    if self.job_kind == "translation":
-                        senses = existing.get("senses", [])
-                        greek_translation = get_greek_translation(word)
-                        entry = {
-                            "input_word": word,
-                            "greek_translation": greek_translation,
-                            "senses": senses,
-                            "status": build_status_en(word, senses, greek_translation),
-                        }
-                        data[key] = entry
-                    else:
-                        entry = enrich_english_word(word)
-                        data[key] = entry
-                else:
-                    if self.job_kind == "translation":
-                        english_translation = get_english_translation(word)
-                        senses = existing.get("senses", [])
-                        entry = {
-                            "input_word": word,
-                            "english_translation": english_translation,
-                            "senses": senses,
-                            "status": build_status_el(word, english_translation),
-                        }
-                        data[key] = entry
-                    else:
-                        entry = enrich_greek_word(
-                            word,
-                            english_dict=english_dict,
-                            english_dict_path=english_dict_path,
-                        )
-                        data[key] = entry
+                entry = build_enrichment_entry(self.job_kind, self.language, word, existing)
+                data[key] = entry
+                # if self.language == "english":
+                #     if self.job_kind == "translation":
+                #         greek_translation = get_greek_translation(word)
+                #         entry = {
+                #             "input_word": word,
+                #             "greek_translation": greek_translation,
+                #             "senses": existing.get("senses", []),
+                #             "status": build_status(word, greek_translation, existing.get("senses", [])),
+                #         }
+                #         data[key] = entry
+                #     else:
+                #         senses = get_wordnet_senses(word)
+                #         entry = {
+                #             "input_word": word,
+                #             "greek_translation": existing.get("greek_translation"),
+                #             "senses": senses,
+                #             "status": build_status(word, existing.get("greek_translation"), senses),
+                #         }
+                #         data[key] = entry
+                # else:
+                #     if self.job_kind == "translation":
+                #         english_translation = get_english_translation(word)
+                #         entry = {
+                #             "input_word": word,
+                #             "english_translation": english_translation,
+                #             "senses": existing.get("senses", []),
+                #             "status": build_status(word, english_translation, existing.get("senses", [])),
+                #         }
+                #         data[key] = entry
+                #     else:
+                #         english_translation = existing.get("english_translation")
+                #         senses = get_wordnet_senses(english_translation) if english_translation else []
+                #         entry = {
+                #             "input_word": word,
+                #             "english_translation": english_translation,
+                #             "senses": senses,
+                #             "status": build_status(word, english_translation, senses),
+                #         }
+                #         data[key] = entry
 
-                save_json_atomic(path, data)
-                state.results_cache_dirty = True
+                pending_writes += 1
+                if pending_writes >= ENRICHMENT_SAVE_EVERY_WORDS or idx == self.total - 1:
+                    save_json_atomic(path, data)
+                    state.results_cache_dirty = True
+                    pending_writes = 0
 
                 self.progress_queue.put(
                     (
@@ -2504,6 +2710,10 @@ class EnrichmentJob:
                 self.progress_queue.put(("error", f"{word}: {e}"))
 
             self.done_count = idx + 1
+
+        if pending_writes:
+            save_json_atomic(path, data)
+            state.results_cache_dirty = True
 
         if not self.cancelled and self.done_count >= self.total:
             self.progress_queue.put(("done", None))
@@ -3109,23 +3319,28 @@ def save_manual_translation(word, translation, language):
     return entry
 
 
-def save_manual_meaning(word, pos, definition, examples, language):
+def save_manual_meaning(word, pos, definitions, examples, language):
     path = state.english_meanings_file if language == "english" else state.greek_meanings_file
     data = load_json_dict(path)
     key = normalize_word(word)
     existing = data.get(key, {})
 
     pos = (pos or "").strip()
-    definition = (definition or "").strip()
+    if isinstance(definitions, str):
+        definitions = [definitions]
+
+    cleaned_definitions = [str(d).strip() for d in definitions if str(d).strip()][:3]
     cleaned_examples = [str(ex).strip() for ex in examples if str(ex).strip()][:3]
 
     senses = []
-    if pos or definition or cleaned_examples:
-        senses = [{
-            "part_of_speech": pos,
-            "definition": definition,
-            "examples": cleaned_examples,
-        }]
+    for i, definition in enumerate(cleaned_definitions):
+        senses.append(
+            {
+                "part_of_speech": pos,
+                "definition": definition,
+                "examples": cleaned_examples if i == 0 else [],
+            }
+        )
 
     translation = (
         existing.get("greek_translation")
@@ -3147,7 +3362,6 @@ def save_manual_meaning(word, pos, definition, examples, language):
     save_json_atomic(path, data)
     _sync_meanings_cache(path, data)
     state.results_cache_dirty = True
-
     return entry
 
 
@@ -3317,13 +3531,25 @@ def do_save():
 
 
 def get_target_words():
-    """shared selection logic used by Save, Translate, and Get
-    Meaning. If any words are marked 'save', use exactly those. Otherwise
-    use all search results except ones marked 'exclude'."""
+    """
+    Target words for Save / Translate / Get Meaning.
+
+    Priority:
+    1) marked "save" words
+    2) visible results if any category filters are active
+    3) all search results except excluded words
+    """
     marked = [w for w, v in state.word_selections.items() if v == "save"]
     if marked:
         marked_set = set(marked)
         return [w for w in state.search_results if w in marked_set]
+
+    # Prefer what is currently visible in the results panel.
+    visible = getattr(state, "results_visible_words", None) or []
+    if visible:
+        excluded = {w for w, v in state.word_selections.items() if v == "exclude"}
+        return [w for w in visible if w not in excluded]
+
     excluded = {w for w, v in state.word_selections.items() if v == "exclude"}
     return [w for w in state.search_results if w not in excluded]
 
@@ -3334,9 +3560,7 @@ def do_translate_action():
     progress in progress_modal."""
     words = get_target_words()
     if not words:
-        state.status = (
-            f"Nothing to translate {special_chars['-']} run Search first."
-        )
+        state.status = f"Nothing to translate {special_chars['-']} search results are empty."
         return
     job = EnrichmentJob("translation", words, state.language)
     progress_modal.start(job, f"Translating {len(words)} word(s)…")
@@ -3348,7 +3572,7 @@ def do_get_meaning_action():
     refreshed, since WordNet senses require English) for the target words."""
     words = get_target_words()
     if not words:
-        state.status = f"Nothing to look up {special_chars['-']} run Search first."
+        state.status = f"Nothing to look up {special_chars['-']} search results are empty."
         return
     job = EnrichmentJob("meaning", words, state.language)
     progress_modal.start(job, f"Getting meaning for {len(words)} word(s)…")
@@ -4472,9 +4696,10 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         ("no_translation_no_meaning", "none"),
     ]
 
-    legend_y = panel.bottom - 28
+    legend_y = panel.bottom - 14
 
-    toggle_rect = pygame.Rect(panel.right - PAD - 86, legend_y - 11, 78, 22)
+    toggle_rect = pygame.Rect(panel.right - PAD - 80, legend_y - 11, 80, 22)
+    hovered_toggle = toggle_rect.collidepoint(mouse_pos)
     draw_button(
         screen,
         toggle_rect,
@@ -4482,7 +4707,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         bg=TEAL if state.colorize_status else BROWN,
         fg=WHITE,
         radius=8,
-        hovered=toggle_rect.collidepoint(mouse_pos),
+        hovered=hovered_toggle,
         font=FONT_SM,
     )
 
@@ -4498,6 +4723,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         chip_w = label_w + 42
         chip_rect = pygame.Rect(x - chip_w, legend_y - 11, chip_w, 22)
 
+        hovered = chip_rect.collidepoint(mouse_pos)
+
         if state.colorize_status:
             fill = STATUS_BG.get(key, PANEL2)
             border = STATUS_BDR.get(key, BORDER)
@@ -4505,18 +4732,16 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
             fill = PANEL2
             border = BORDER
 
+        if hovered:
+            fill = lighten(fill, 14)
+            border = lighten(border, 14)
+
         pygame.draw.rect(screen, fill, chip_rect, border_radius=10)
         pygame.draw.rect(screen, border, chip_rect, 1, border_radius=10)
 
         mark_rect = pygame.Rect(chip_rect.x + 5, chip_rect.y + 5, 12, 12)
-
-        if selected:
-            mark_fill = GREEN_BG
-            mark_border = GREEN_BDR
-        else:
-            mark_fill = RED_BG
-            mark_border = RED_BDR
-
+        mark_fill = GREEN_BG if selected else RED_BG
+        mark_border = GREEN_BDR if selected else RED_BDR
         pygame.draw.rect(screen, mark_fill, mark_rect, border_radius=4)
         pygame.draw.rect(screen, mark_border, mark_rect, 1, border_radius=4)
 
@@ -4568,7 +4793,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         row = idx // cols
         wx = panel.x + PAD + col * (cw + GAP)
         wy = grid_y + row * (ch_h + 4)
-        if wy + ch_h > panel.bottom - 44:
+        if wy + ch_h > panel.bottom - 8:
             break
 
         wr = pygame.Rect(wx, wy, cw, ch_h)
@@ -4758,9 +4983,8 @@ if __name__ == "__main__":
                 WIDTH, HEIGHT = event.w, event.h
                 screen = pygame.display.set_mode((WIDTH, HEIGHT), pygame.RESIZABLE)
 
-            modal_was_open = info_modal.visible
-            info_modal.handle_event(event, WIDTH, HEIGHT)
-            if modal_was_open:
+            # Let the enrichment modal get first crack at clicks/keys.
+            if enrichment_modal.visible and enrichment_modal.handle_event(event, WIDTH, HEIGHT):
                 continue
 
             progress_modal_was_open = progress_modal.visible
@@ -4768,7 +4992,9 @@ if __name__ == "__main__":
             if progress_modal_was_open:
                 continue
 
-            if enrichment_modal.handle_event(event, WIDTH, HEIGHT):
+            modal_was_open = info_modal.visible
+            info_modal.handle_event(event, WIDTH, HEIGHT)
+            if modal_was_open:
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN:
