@@ -516,6 +516,7 @@ def resource_path(relative_path):
 
 _NLTK_READY = False
 _meanings_cache = {}  # path -> {"mtime": float, "data": dict}
+_results_legend_rects = {"toggle": None, "items": {}}
 
 
 def ensure_nltk_ready():
@@ -535,6 +536,17 @@ def normalize_word(word: str) -> str:
     return word.strip().lower()
 
 
+def translate_text(word: str, source: str, target: str):
+    """Generic translate wrapper; returns None on failure."""
+    if GoogleTranslator is None:
+        return None
+    try:
+        translator = GoogleTranslator(source=source, target=target)
+        return translator.translate(word)
+    except Exception:
+        return None
+
+
 def get_greek_translation(word: str) -> str | None:
     return translate_text(word, "en", "el")
 
@@ -543,20 +555,51 @@ def get_english_translation(word: str) -> str | None:
     return translate_text(word, "el", "en")
 
 
-def build_status_en(senses, greek_translation):
-    has_meanings = bool(senses)
-    has_translation = bool(greek_translation and greek_translation.strip())
-    if has_meanings and has_translation:
+def clean_translation(source, translation):
+    """
+    Normalize translations:
+    - None / blank -> None
+    - identical to source word -> None
+    """
+    if translation is None:
+        return None
+    cleaned = str(translation).strip()
+    if not cleaned:
+        return None
+    if normalize_word(cleaned) == normalize_word(source):
+        return None
+    return cleaned
+
+
+def build_status(source_word, translation, senses):
+    """
+    Shared status logic for English and Greek dictionaries.
+    Translation identical to the source word is treated as missing.
+    Status labels match dictionary_builder.py:
+        ok
+        no_translation
+        no_meaning
+        no_translation_no_meaning
+    """
+    effective_translation = clean_translation(source_word, translation)
+    has_translation = bool(effective_translation)
+    has_meaning = bool(isinstance(senses, list) and senses)
+
+    if has_translation and has_meaning:
         return "ok"
-    if not has_meanings and not has_translation:
-        return "no_meanings_no_translation"
-    if not has_meanings:
-        return "no_meanings"
-    return "no_translation"
+    if not has_translation and not has_meaning:
+        return "no_translation_no_meaning"
+    if not has_translation:
+        return "no_translation"
+    return "no_meaning"
 
 
-def build_status_el(translation):
-    return "ok" if translation else "no_translation"
+def build_status_en(source_word, senses, greek_translation):
+    return build_status(source_word, greek_translation, senses)
+
+
+def build_status_el(source_word, english_translation, senses=None):
+    return build_status(source_word, english_translation, senses or [])
 
 
 def load_json_dict(path):
@@ -586,12 +629,6 @@ def is_single_word(text: str) -> bool:
     return len(parts) == 1 and parts[0].isalpha()
 
 
-MULTI_WORD_NOTE = (
-    "Translation has multiple words; cannot match to a single English "
-    "dictionary entry."
-)
-
-
 def resolve_senses_for_translation(
     english_translation: str | None,
     english_dict: dict,
@@ -602,7 +639,7 @@ def resolve_senses_for_translation(
         return [], "no_translation", None
 
     if not is_single_word(english_translation):
-        return [], "multiple_words_translation", MULTI_WORD_NOTE
+        return [], "no_meaning", "Translation has multiple words, and cannot match to a single English dictionary entry."
 
     key = normalize_word(english_translation)
     existing = english_dict.get(key)
@@ -611,7 +648,7 @@ def resolve_senses_for_translation(
         return existing["senses"], "ok", None
 
     if existing is not None and "senses" in existing:
-        return [], "no_senses", None
+        return [], "no_meaning", None
 
     senses = get_wordnet_senses(english_translation, max_senses)
     greek_translation_back = get_greek_translation(english_translation)
@@ -620,13 +657,14 @@ def resolve_senses_for_translation(
         "input_word": english_translation,
         "greek_translation": greek_translation_back,
         "senses": senses,
-        "status": build_status_en(senses, greek_translation_back),
+        "status": build_status_en(word, senses, greek_translation_back),
     }
     save_json_atomic(english_dict_path, english_dict)
+    state.results_cache_dirty = True
 
     if senses:
         return senses, "ok", None
-    return [], "no_senses", None
+    return [], "no_meaning", None
 
 
 def enrich_english_word(word, max_senses=None):
@@ -636,7 +674,7 @@ def enrich_english_word(word, max_senses=None):
         "input_word": word,
         "greek_translation": greek_translation,
         "senses": senses,
-        "status": build_status_en(senses, greek_translation),
+        "status": build_status_en(word, senses, greek_translation),
     }
 
 
@@ -651,7 +689,7 @@ def enrich_greek_word(
         return {
             "input_word": word,
             "english_translation": english_translation,
-            "status": build_status_el(english_translation),
+            "status": build_status_el(word, english_translation),
         }
 
     english_translation = get_english_translation(word)
@@ -713,72 +751,13 @@ def get_wordnet_senses(word: str, max_senses=None):
     return senses
 
 
-def translate_text(word: str, source: str, target: str):
-    """Generic translate wrapper; returns None on failure."""
-    if GoogleTranslator is None:
-        return None
-    try:
-        translator = GoogleTranslator(source=source, target=target)
-        return translator.translate(word)
-    except Exception:
-        return None
-
-
-def build_status_en(senses, greek_translation):
-    has_meanings = bool(senses)
-    has_translation = bool(greek_translation and greek_translation.strip())
-    if has_meanings and has_translation:
-        return "ok"
-    if not has_meanings and not has_translation:
-        return "no_meanings_no_translation"
-    if not has_meanings:
-        return "no_meanings"
-    return "no_translation"
-
-
-def build_status_el(translation):
-    return "ok" if translation else "no_translation"
-
-
-def load_json_dict(path):
-    if not path or not os.path.exists(path):
-        return {}
-    try:
-        with open(path, "r", encoding="utf-8") as f:
-            data = json.load(f)
-            return data if isinstance(data, dict) else {}
-    except Exception:
-        return {}
-
-
-def save_json_atomic(path, data):
-    tmp = path + ".tmp"
-    with open(tmp, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-        f.flush()
-        os.fsync(f.fileno())
-    os.replace(tmp, path)
-
-
-def enrich_english_word(word, max_senses=None):
-    """Returns a dict entry matching english_meanings.json schema."""
-    senses = get_wordnet_senses(word, max_senses)
-    greek_translation = translate_text(word, "en", "el")
-    return {
-        "input_word": word,
-        "greek_translation": greek_translation,
-        "senses": senses,
-        "status": build_status_en(senses, greek_translation),
-    }
-
-
 # ══════════════════════════════════════════════════════════════════
 #  Pygame + fonts
 # ══════════════════════════════════════════════════════════════════
 
 use_ascii = False
 if use_ascii:
-    special_caracters = {
+    special_chars = {
         "-": "-",
         "^": "^",
         "v": "v",
@@ -787,9 +766,10 @@ if use_ascii:
         "*": "*",
         "~": "~",
         "[OK]": "[OK]",
+        "X": "X",
     }
 else:
-    special_caracters = {
+    special_chars = {
         "-": "—",
         "^": "↑",
         "v": "↓",
@@ -798,6 +778,7 @@ else:
         "*": "•",
         "~": "≈",
         "[OK]": "✓",
+        "X": "✕",
     }
 
 pygame.init()
@@ -878,6 +859,7 @@ PINK_BDR = (210, 140, 185)
 PURPLE = (122, 75, 200)
 PURPLE_BG = (242, 235, 252)
 PURPLE_BDR = (170, 135, 220)
+BLACK = (0, 0, 0)
 
 LIGHT_THEME = {
     "BG": (240, 242, 247),
@@ -947,6 +929,14 @@ DARK_THEME = {
     "PURPLE_BG": (40, 28, 58),
     "PURPLE_BDR": (120, 90, 180),
 }
+
+STATUS_KEYS = ("ok", "no_translation", "no_meaning", "no_translation_no_meaning")
+STATUS_BG = {}
+STATUS_BDR = {}
+
+
+def status_colors(status):
+    return STATUS_BG.get(status, PANEL2), STATUS_BDR.get(status, BORDER)
 
 # ─── Layout constants ─────────────────────────────────────────────
 MAX_WORD_LENGTH = 35
@@ -1129,6 +1119,7 @@ def set_theme(mode: str):
     global BLUE_BG, GREEN, GREEN_BG, GREEN_BDR, RED, RED_BG, RED_BDR
     global CYAN, DARK, WHITE, BROWN, BROWN_BG, BROWN_BDR, ORANGE
     global TEAL, TEAL_BG, TEAL_BDR, PINK, PINK_BG, PINK_BDR, PURPLE, PURPLE_BG, PURPLE_BDR
+    global STATUS_BG, STATUS_BDR
 
     theme = DARK_THEME if mode == "dark" else LIGHT_THEME
 
@@ -1164,6 +1155,33 @@ def set_theme(mode: str):
     PURPLE_BG = theme["PURPLE_BG"]
     PURPLE_BDR = theme["PURPLE_BDR"]
 
+    if mode == "dark":
+        STATUS_BG = {
+            "ok": (38, 54, 82),
+            "no_translation": (74, 54, 28),
+            "no_meaning": (74, 34, 58),
+            "no_translation_no_meaning": (52, 52, 52),
+        }
+        STATUS_BDR = {
+            "ok": (104, 140, 204),
+            "no_translation": (182, 128, 58),
+            "no_meaning": (182, 88, 150),
+            "no_translation_no_meaning": (112, 112, 112),
+        }
+    else:
+        STATUS_BG = {
+            "ok": (216, 232, 255),
+            "no_translation": (255, 225, 190),
+            "no_meaning": (255, 220, 238),
+            "no_translation_no_meaning": (226, 226, 226),
+        }
+        STATUS_BDR = {
+            "ok": (126, 172, 230),
+            "no_translation": (242, 155, 55),
+            "no_meaning": (218, 108, 176),
+            "no_translation_no_meaning": (170, 170, 170),
+        }
+
 
 # ══════════════════════════════════════════════════════════════════
 #  App state
@@ -1178,7 +1196,7 @@ class InfoModal:
     """Full-screen dimmed overlay showing the instructions. Click outside or press Escape to close."""
 
     CONTENT = [
-        (f"Word Finder {special_caracters["-"]} Instructions", "title"),
+        (f"Word Finder {special_chars["-"]} Instructions", "title"),
         ("", "gap"),
         ("Two Modes", "heading"),
         (
@@ -1187,37 +1205,37 @@ class InfoModal:
             "body",
         ),
         (
-            f"Letter Match {special_caracters["-"]} classic slot-based filtering",
+            f"Letter Match {special_chars["-"]} classic slot-based filtering",
             "bullet",
         ),
         (
-            f"Pattern Hunt {special_caracters["-"]} grid-based pattern filtering",
+            f"Pattern Hunt {special_chars["-"]} grid-based pattern filtering",
             "bullet",
         ),
         ("", "gap"),
         ("Letter Match", "heading"),
         ("Filters words by applying per-slot letter rules.", "body"),
         (
-            f"Three input modes (cycle with {special_caracters["^"]} {special_caracters["v"]} or click the pill toggle):",
+            f"Three input modes (cycle with {special_chars["^"]} {special_chars["v"]} or click the pill toggle):",
             "body",
         ),
         (
-            f"Valid {special_caracters["-"]} the selected letter group must appear in that slot.",
+            f"Valid {special_chars["-"]} the selected letter group must appear in that slot.",
             "bullet",
         ),
         (
-            f"Invalid {special_caracters["-"]} the selected letter group must not appear in that slot.",
+            f"Invalid {special_chars["-"]} the selected letter group must not appear in that slot.",
             "bullet",
         ),
         (
-            f"Exist {special_caracters["-"]} the letter must appear somewhere in the word. Repeating a letter in "
+            f"Exist {special_chars["-"]} the letter must appear somewhere in the word. Repeating a letter in "
             "Exist means it must occur multiple times.",
             "bullet",
         ),
         ("", "gap"),
         ("Navigation:", "body"),
         (
-            f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between slots (Valid/Invalid) or between Exist items.",
+            f"{special_chars["<"]} {special_chars[">"]} arrows: move between slots (Valid/Invalid) or between Exist items.",
             "bullet",
         ),
         (
@@ -1230,10 +1248,10 @@ class InfoModal:
         ("", "gap"),
         ("Slot / All scope (Shift+Space or pill toggle):", "body"),
         (
-            f"Slot {special_caracters["-"]} input affects only the selected slot.",
+            f"Slot {special_chars["-"]} input affects only the selected slot.",
             "bullet",
         ),
-        (f"All {special_caracters["-"]} input affects all slots at once.", "bullet"),
+        (f"All {special_chars["-"]} input affects all slots at once.", "bullet"),
         ("", "gap"),
         (
             "When word length increases, previously entered slot data is preserved. Data "
@@ -1251,15 +1269,15 @@ class InfoModal:
         ("", "gap"),
         ("Navigation:", "body"),
         (
-            f"{special_caracters["^"]} {special_caracters["v"]} arrows: move between Start / Middle / End rows.",
+            f"{special_chars["^"]} {special_chars["v"]} arrows: move between Start / Middle / End rows.",
             "bullet",
         ),
         (
-            f"{special_caracters["<"]} {special_caracters[">"]} arrows: move between the slots of a certain cell group.",
+            f"{special_chars["<"]} {special_chars[">"]} arrows: move between the slots of a certain cell group.",
             "bullet",
         ),
         (
-            f"Shift + {special_caracters["<"]} {special_caracters[">"]} arrows: move between Valid / Invalid / Exist columns.",
+            f"Shift + {special_chars["<"]} {special_chars[">"]} arrows: move between Valid / Invalid / Exist columns.",
             "bullet",
         ),
         ("Click a slot to select it along with its cell group.", "bullet"),
@@ -1271,29 +1289,29 @@ class InfoModal:
         ("", "gap"),
         ("Cell behavior:", "body"),
         (
-            f"Valid {special_caracters["-"]} at least one pattern in the cell must match.",
+            f"Valid {special_chars["-"]} at least one pattern in the cell must match.",
             "bullet",
         ),
         (
-            f"Invalid {special_caracters["-"]} no pattern in the cell may match.",
+            f"Invalid {special_chars["-"]} no pattern in the cell may match.",
             "bullet",
         ),
         (
-            f"Exist {special_caracters["-"]} every pattern in the cell must appear in the word.",
+            f"Exist {special_chars["-"]} every pattern in the cell must appear in the word.",
             "bullet",
         ),
         ("", "gap"),
         ("Pattern matching rows:", "body"),
         (
-            f"Start {special_caracters["-"]} sequence must match the beginning of the word.",
+            f"Start {special_chars["-"]} sequence must match the beginning of the word.",
             "bullet",
         ),
         (
-            f"Middle {special_caracters["-"]} sequence must appear strictly in the word's interior.",
+            f"Middle {special_chars["-"]} sequence must appear strictly in the word's interior.",
             "bullet",
         ),
         (
-            f"End {special_caracters["-"]} sequence must match the end of the word.",
+            f"End {special_chars["-"]} sequence must match the end of the word.",
             "bullet",
         ),
         ("", "gap"),
@@ -1322,47 +1340,51 @@ class InfoModal:
         ),
         ("", "gap"),
         ("Common Controls", "heading"),
-        (f"Enter / Search button {special_caracters["-"]} run the search.", "bullet"),
-        (f"Ctrl+S {special_caracters["-"]} save current results to file.", "bullet"),
+        (f"Enter / Search button {special_chars["-"]} run the search.", "bullet"),
+        (f"Ctrl+S {special_chars["-"]} save current results to file.", "bullet"),
         (
-            f"Page Up / Page Down {special_caracters["-"]} scroll through result pages.",
+            f"Page Up / Page Down {special_chars["-"]} scroll through result pages.",
             "bullet",
         ),
         (
-            f"Tab {special_caracters["-"]} toggle between Letter Match and Pattern Hunt.",
+            f"Tab {special_chars["-"]} toggle between Letter Match and Pattern Hunt.",
             "bullet",
         ),
-        (f"Shift+Space {special_caracters["-"]} toggle Slot and All.", "bullet"),
+        (f"Shift+Space {special_chars["-"]} toggle Slot and All.", "bullet"),
         (
-            f"/ (slash) {special_caracters["-"]} switch between Greek and English word lists.",
-            "bullet",
-        ),
-        (
-            f"Ctrl+Space {special_caracters["-"]} expand / collapse Pattern Hunt slot(s).",
+            f"/ (slash) {special_chars["-"]} switch between Greek and English word lists.",
             "bullet",
         ),
         (
-            f"Ctrl+I or the circular i button {special_caracters["-"]} open this instructions window.",
+            f"Ctrl+Space {special_chars["-"]} expand / collapse Pattern Hunt slot(s).",
             "bullet",
         ),
         (
-            f"Shift + / {special_caracters['-']} increase/decrease word length. In Pattern Hunt, "
+            f"Ctrl+I or the circular i button {special_chars["-"]} open this instructions window.",
+            "bullet",
+        ),
+        (
+            f"Shift + / {special_chars['-']} increase/decrease word length. In Pattern Hunt, "
             'holding at 1 and pressing Shift+- switches to "All"; from "All", Shift++ returns to 1.',
             "bullet",
         ),
-        (f"Ctrl + / {special_caracters['-']} increase/decrease max preview.", "bullet"),
+        (f"Ctrl + / {special_chars['-']} increase/decrease max preview.", "bullet"),
         (
-            f"+ / {special_caracters['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
+            f"+ / {special_chars['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
             "bullet",
         ),
         ("", "gap"),
         ("Results panel:", "heading"),
         (
-            f'Left-click a word {special_caracters["-"]} mark it as "to save" (green).',
+            f'Left-click a word {special_chars["-"]} mark it as "to save" (green {special_chars["[OK]"]}).',
             "bullet",
         ),
         (
-            f'Right-click a word {special_caracters["-"]} mark it as "excluded" (red).',
+            f'Right-click a word {special_chars["-"]} mark it as "excluded" (red {special_chars["X"]}).',
+            "bullet",
+        ),
+        (
+            "Neutral words use status colors: blue = ok, orange = no_translation, pink = no_meaning, gray = no_translation_no_meaning.",
             "bullet",
         ),
         ("Click again to deselect.", "bullet"),
@@ -1374,18 +1396,21 @@ class InfoModal:
         ("", "gap"),
         ("Translations & Meanings", "heading"),
         (
-            "Two checkboxes in the file row control what appears in the results "
-            "hover tooltip:",
+            "The Translate and Get Meaning buttons first ask whether you want Set or Get.",
             "body",
         ),
         (
-            f"Show translation {special_caracters["-"]} hovering a word shows "
-            f"[word] {special_caracters[">"]} [translation] using the saved "
+            "Get runs the automatic lookup. Set opens a manual editor with a word droplist.",
+            "body",
+        ),
+        (
+            f"Show translation {special_chars["-"]} hovering a word shows "
+            f"[word] {special_chars[">"]} [translation] using the saved "
             "translation JSON files.",
             "bullet",
         ),
         (
-            f"Show meaning {special_caracters["-"]} hovering a word shows its "
+            f"Show meaning {special_chars["-"]} hovering a word shows its "
             "part of speech, definition, and an example, pulled from the saved "
             "meanings JSON file (English words only; Greek words show their "
             "saved English translation instead, since dictionary senses are "
@@ -1411,8 +1436,8 @@ class InfoModal:
         ("Selection counts", "heading"),
         (
             "The top of the results panel shows how many words are currently "
-            f'selected and excluded, e.g. "12 words selected {special_caracters["[OK]"]}" and "3 words '
-            'excluded X". This selection is shared by Save, Translate, and '
+            f'selected and excluded, e.g. "12 words selected {special_chars['[OK]']}" and "3 words '
+            f'excluded {special_chars['X']}". This selection is shared by Save, Translate, and '
             "Get Meaning.",
             "body",
         ),
@@ -1524,7 +1549,7 @@ class InfoModal:
                 h += extra_gap
                 continue
             indent = 18 if kind == "bullet" else 0
-            prefix = f"{special_caracters["*"]}  " if kind == "bullet" else ""
+            prefix = f"{special_chars["*"]}  " if kind == "bullet" else ""
             for _ in self._wrap(prefix + text, font, max_w - indent):
                 h += font.get_height() + extra_gap
         return h
@@ -1588,7 +1613,7 @@ class InfoModal:
                 y += extra_gap
                 continue
             indent = 18 if kind == "bullet" else 0
-            prefix = f"{special_caracters["*"]}  " if kind == "bullet" else ""
+            prefix = f"{special_chars["*"]}  " if kind == "bullet" else ""
             for line in self._wrap(prefix + text, font, max_w - indent):
                 if panel.y <= y <= panel.y + panel.height:
                     surface.blit(
@@ -1709,17 +1734,17 @@ class ProgressModal:
                     job_kind = payload["job_kind"]
                     language = payload["language"]
 
-                    self.log_lines.append(f"{special_caracters['[OK]']} {word}")
+                    self.log_lines.append(f"{special_chars['[OK]']} {word}")
                     for line in format_progress_result_lines(job_kind, entry, language):
-                        self.log_lines.append(f"{special_caracters['>']} {line}")
+                        self.log_lines.append(f"{special_chars['>']} {line}")
                     self.log_lines.append("")
 
                 elif kind == "error":
-                    self.log_lines.append(f"X {payload}")
+                    self.log_lines.append(f"{special_chars['X']} {payload}")
                     self.log_lines.append("")
 
                 elif kind == "done":
-                    self.log_lines.append(f"{special_caracters['[OK]']} Finished.")
+                    self.log_lines.append(f"{special_chars['[OK]']} Finished.")
 
         except queue.Empty:
             pass
@@ -1868,9 +1893,9 @@ class ProgressModal:
                 ly += line_h
                 continue
 
-            if raw_line.startswith("X"):
+            if raw_line.startswith(f"{special_chars['X']}"):
                 color = RED
-            elif raw_line.startswith(special_caracters["[OK]"]):
+            elif raw_line.startswith(special_chars['[OK]']):
                 color = ACCENT
             else:
                 color = MUTED
@@ -1974,6 +1999,383 @@ class ProgressModal:
         return lines or [""]
 
 
+class EnrichmentModal:
+    def __init__(self):
+        self.visible = False
+        self.stage = None          # "choice" | "manual"
+        self.job_kind = None       # "translation" | "meaning"
+        self.words = []
+        self.word_index = 0
+        self.language = "greek"
+        self.dropdown_open = False
+        self.dropdown_scroll = 0
+        self.active_field = None
+        self.fields = {}
+        self.drafts = {}
+        self._rects = {}
+
+    def open_choice(self, job_kind):
+        self.visible = True
+        self.stage = "choice"
+        self.job_kind = job_kind
+        self.dropdown_open = False
+        self.dropdown_scroll = 0
+        self.active_field = None
+        self.fields = {}
+        self.drafts = {}
+        pygame.key.stop_text_input()
+
+    def open_manual(self, job_kind):
+        words = get_target_words()
+        if not words:
+            state.status = f"Nothing to edit {special_chars['-']} run Search first."
+            return
+
+        self.visible = True
+        self.stage = "manual"
+        self.job_kind = job_kind
+        self.words = list(words)
+        self.word_index = 0
+        self.language = state.language
+        self.dropdown_open = False
+        self.dropdown_scroll = 0
+        self.drafts = {}
+        pygame.key.start_text_input()
+        self._load_current()
+
+    def close(self):
+        self.visible = False
+        self.stage = None
+        self.job_kind = None
+        self.words = []
+        self.word_index = 0
+        self.dropdown_open = False
+        self.dropdown_scroll = 0
+        self.active_field = None
+        self.fields = {}
+        self.drafts = {}
+        pygame.key.stop_text_input()
+
+    def _path(self):
+        return state.english_meanings_file if self.language == "english" else state.greek_meanings_file
+
+    def _current_word(self):
+        if not self.words:
+            return ""
+        return self.words[self.word_index]
+
+    def _existing_entry(self, word):
+        data = load_json_dict(self._path())
+        return data.get(normalize_word(word), {}) or {}
+
+    def _load_current(self):
+        word = self._current_word()
+        if not word:
+            return
+
+        entry = self.drafts.get(word) or self._existing_entry(word)
+
+        if self.job_kind == "translation":
+            existing_translation = (
+                entry.get("greek_translation")
+                if self.language == "english"
+                else entry.get("english_translation")
+            )
+            self.fields = {"translation": existing_translation or ""}
+            self.active_field = "translation"
+        else:
+            senses = entry.get("senses") or []
+            first = senses[0] if senses else {}
+            exs = first.get("examples") or []
+            self.fields = {
+                "pos": first.get("part_of_speech", ""),
+                "definition": first.get("definition", ""),
+                "ex1": exs[0] if len(exs) > 0 else "",
+                "ex2": exs[1] if len(exs) > 1 else "",
+                "ex3": exs[2] if len(exs) > 2 else "",
+            }
+            self.active_field = "pos"
+
+    def _snapshot_current(self):
+        word = self._current_word()
+        if not word:
+            return
+
+        if self.job_kind == "translation":
+            self.drafts[word] = {"translation": self.fields.get("translation", "")}
+        else:
+            self.drafts[word] = {
+                "pos": self.fields.get("pos", ""),
+                "definition": self.fields.get("definition", ""),
+                "ex1": self.fields.get("ex1", ""),
+                "ex2": self.fields.get("ex2", ""),
+                "ex3": self.fields.get("ex3", ""),
+            }
+
+    def _apply_current(self):
+        word = self._current_word()
+        if not word:
+            return
+
+        self._snapshot_current()
+
+        if self.job_kind == "translation":
+            entry = save_manual_translation(word, self.fields.get("translation", ""), self.language)
+        else:
+            entry = save_manual_meaning(
+                word,
+                self.fields.get("pos", ""),
+                self.fields.get("definition", ""),
+                [
+                    self.fields.get("ex1", ""),
+                    self.fields.get("ex2", ""),
+                    self.fields.get("ex3", ""),
+                ],
+                self.language,
+            )
+
+        # Keep the visible results in sync immediately.
+        state.results_cache_dirty = True
+        rebuild_results_cache()
+        refresh_visible_results()
+
+        state.status = f"Saved manual {self.job_kind} for {word}"
+        return entry
+
+    def _panel_rect(self, W, H):
+        pw = min(760, W - 100)
+        ph = min(640, H - 80)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _word_item_rects(self, panel):
+        if not self.words:
+            return []
+
+        sel_h = 24
+        list_x = panel.x + 24
+        list_y = panel.y + 72
+        list_w = 240
+        max_items = 5
+        start = clamp(self.dropdown_scroll, 0, max(0, len(self.words) - max_items))
+        end = min(len(self.words), start + max_items)
+        rects = []
+        for i, word in enumerate(self.words[start:end], start=start):
+            r = pygame.Rect(list_x, list_y + (i - start) * (sel_h + 4), list_w, sel_h)
+            rects.append((i, word, r))
+        return rects
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
+
+        panel = self._panel_rect(W, H)
+        consumed = True
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.close()
+                return True
+
+            if self.stage == "manual":
+                if event.key == pygame.K_TAB:
+                    if self.job_kind == "translation":
+                        self.active_field = "translation"
+                    else:
+                        order = ["pos", "definition", "ex1", "ex2", "ex3"]
+                        idx = order.index(self.active_field) if self.active_field in order else 0
+                        self.active_field = order[(idx + 1) % len(order)]
+                    return True
+
+                if event.key == pygame.K_RETURN:
+                    self._apply_current()
+                    return True
+
+                if event.key == pygame.K_UP and self.dropdown_open:
+                    self.dropdown_scroll = max(0, self.dropdown_scroll - 1)
+                    return True
+
+                if event.key == pygame.K_DOWN and self.dropdown_open:
+                    self.dropdown_scroll = min(max(0, len(self.words) - 5), self.dropdown_scroll + 1)
+                    return True
+
+                if event.key == pygame.K_BACKSPACE and self.active_field:
+                    self.fields[self.active_field] = self.fields.get(self.active_field, "")[:-1]
+                    return True
+
+                if event.unicode and self.active_field:
+                    ch = event.unicode
+                    if ch.isprintable():
+                        self.fields[self.active_field] = self.fields.get(self.active_field, "") + ch
+                        return True
+
+        if event.type == pygame.MOUSEWHEEL and self.stage == "manual":
+            if self.dropdown_open:
+                self.dropdown_scroll = clamp(
+                    self.dropdown_scroll - event.y,
+                    0,
+                    max(0, len(self.words) - 5),
+                )
+                return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mx, my = event.pos
+
+            if not panel.collidepoint(event.pos):
+                if self.stage == "choice":
+                    self.close()
+                return True
+
+            if self.stage == "choice":
+                set_btn = self._rects.get("set")
+                get_btn = self._rects.get("get")
+                if set_btn and set_btn.collidepoint(event.pos):
+                    self.open_manual(self.job_kind)
+                elif get_btn and get_btn.collidepoint(event.pos):
+                    self.close()
+                    if self.job_kind == "translation":
+                        do_translate_action()
+                    else:
+                        do_get_meaning_action()
+                return True
+
+            # manual stage
+            selector = self._rects.get("selector")
+            if selector and selector.collidepoint(event.pos):
+                self.dropdown_open = not self.dropdown_open
+                return True
+
+            if self.dropdown_open:
+                for idx, word, r in self._word_item_rects(panel):
+                    if r.collidepoint(event.pos):
+                        self._snapshot_current()
+                        self.word_index = idx
+                        self._load_current()
+                        self.dropdown_open = False
+                        return True
+
+            # field clicks
+            for key, r in self._rects.get("fields", {}).items():
+                if r.collidepoint(event.pos):
+                    self.active_field = key
+                    return True
+
+            apply_btn = self._rects.get("apply")
+            close_btn = self._rects.get("close")
+            if apply_btn and apply_btn.collidepoint(event.pos):
+                self._apply_current()
+                return True
+            if close_btn and close_btn.collidepoint(event.pos):
+                self.close()
+                return True
+
+            return True
+
+        return consumed
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, BORDER, radius=16)
+
+        if self.stage == "choice":
+            title = "Translation" if self.job_kind == "translation" else "Meaning"
+            blit_text(surface, f"{title} mode", FONT_LG, TEXT, panel.x + 24, panel.y + 20)
+
+            blit_text(
+                surface,
+                "Choose automatic lookup or manual entry.",
+                FONT_SM,
+                MUTED,
+                panel.x + 24,
+                panel.y + 56,
+            )
+
+            set_btn = pygame.Rect(panel.x + 24, panel.bottom - 62, 110, 30)
+            get_btn = pygame.Rect(panel.x + 146, panel.bottom - 62, 110, 30)
+            self._rects = {"set": set_btn, "get": get_btn}
+
+            draw_button(surface, set_btn, "Set", bg=TEAL, fg=WHITE, hovered=set_btn.collidepoint(mouse_pos), font=FONT_SM)
+            draw_button(surface, get_btn, "Get", bg=ORANGE, fg=WHITE, hovered=get_btn.collidepoint(mouse_pos), font=FONT_SM)
+            return
+
+        # manual stage
+        title = "Manual Translation" if self.job_kind == "translation" else "Manual Meaning"
+        blit_text(surface, title, FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+
+        word_selector = pygame.Rect(panel.x + 24, panel.y + 70, 300, 30)
+        self._rects = {"selector": word_selector, "fields": {}, "apply": None, "close": None}
+
+        field_y = panel.y + 130
+        field_h = 50
+        field_w = panel.width - 48
+        left = panel.x + 24
+
+        def field(label, key, y, height=30):
+            blit_text(surface, label, FONT_SM, MUTED, left, y - 18)
+            r = pygame.Rect(left, y, field_w, height)
+            self._rects["fields"][key] = r
+            active = (self.active_field == key)
+            draw_panel(surface, r, BLUE_BG if active else PANEL2, ACCENT if active else BORDER, radius=8)
+            text = self.fields.get(key, "")
+            txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 12)
+            blit_text(surface, txt, FONT_SM, TEXT, r.x + 6, r.centery, anchor="midleft")
+            return r.bottom + 25
+
+        if self.job_kind == "translation":
+            field_y = field("Translation", "translation", field_y)
+        else:
+            field_y = field("Part of speech", "pos", field_y, field_h)
+            field_y = field("Definition", "definition", field_y, field_h)
+            field_y = field("Example 1", "ex1", field_y, field_h)
+            field_y = field("Example 2", "ex2", field_y, field_h)
+            field_y = field("Example 3", "ex3", field_y, field_h)
+
+        apply_btn = pygame.Rect(panel.x + 24, panel.bottom - 62, 110, 30)
+        close_btn = pygame.Rect(panel.right - 134, panel.bottom - 62, 110, 30)
+        self._rects["apply"] = apply_btn
+        self._rects["close"] = close_btn
+
+        draw_button(
+            surface,
+            word_selector,
+            fit_text_with_ellipsis(self._current_word(), FONT_SM, word_selector.width - 20),
+            bg=BLUE_BG,
+            fg=TEXT,
+            hovered=word_selector.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        if self.dropdown_open:
+            items = self._word_item_rects(panel)
+            dd_h = min(5, len(items)) * 28
+            dd_rect = pygame.Rect(word_selector.x, word_selector.bottom + 4, word_selector.width, dd_h)
+            draw_panel(surface, dd_rect, PANEL2, BORDER, radius=10)
+
+            for idx, word, r in items:
+                rr = pygame.Rect(r.x, r.y + 32, r.width, r.height)
+                hovered = rr.collidepoint(mouse_pos)
+                pygame.draw.rect(surface, BLUE_BG if idx == self.word_index else PANEL, rr, border_radius=6)
+                pygame.draw.rect(surface, BORDER, rr, 1, border_radius=6)
+                blit_text(
+                    surface,
+                    fit_text_with_ellipsis(word, FONT_SM, rr.width - 10),
+                    FONT_SM,
+                    TEXT,
+                    rr.x + 6,
+                    rr.centery,
+                    anchor="midleft",
+                )
+
+        draw_button(surface, apply_btn, "Apply", bg=GREEN, fg=WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(surface, close_btn, "Close", bg=RED, fg=WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Background enrichment worker (runs in a thread, reports via queue)
 # ══════════════════════════════════════════════════════════════════
@@ -1985,7 +2387,7 @@ class EnrichmentJob:
     progress back to the main thread through a thread-safe queue."""
 
     def __init__(self, job_kind, words, language):
-        self.job_kind = job_kind  # "translate" | "meaning"
+        self.job_kind = job_kind  # "translation" | "meaning"
         self.words = list(words)
         self.language = language  # "greek" | "english"
         self.progress_queue = queue.Queue()
@@ -2019,7 +2421,7 @@ class EnrichmentJob:
         self._run_event.set()
 
     def _target_path(self):
-        if self.job_kind == "translate":
+        if self.job_kind == "translation":
             return (
                 state.greek_meanings_file
                 if self.language == "greek"
@@ -2051,28 +2453,28 @@ class EnrichmentJob:
 
             try:
                 if self.language == "english":
-                    if self.job_kind == "translate":
+                    if self.job_kind == "translation":
                         senses = existing.get("senses", [])
                         greek_translation = get_greek_translation(word)
                         entry = {
                             "input_word": word,
                             "greek_translation": greek_translation,
                             "senses": senses,
-                            "status": build_status_en(senses, greek_translation),
+                            "status": build_status_en(word, senses, greek_translation),
                         }
                         data[key] = entry
                     else:
                         entry = enrich_english_word(word)
                         data[key] = entry
                 else:
-                    if self.job_kind == "translate":
+                    if self.job_kind == "translation":
                         english_translation = get_english_translation(word)
                         senses = existing.get("senses", [])
                         entry = {
                             "input_word": word,
                             "english_translation": english_translation,
                             "senses": senses,
-                            "status": build_status_el(english_translation),
+                            "status": build_status_el(word, english_translation),
                         }
                         data[key] = entry
                     else:
@@ -2084,6 +2486,8 @@ class EnrichmentJob:
                         data[key] = entry
 
                 save_json_atomic(path, data)
+                state.results_cache_dirty = True
+
                 self.progress_queue.put(
                     (
                         "result",
@@ -2245,10 +2649,10 @@ def poll_search_job():
                 state.search_results = payload
                 state.word_selections = {}
                 state.preview_start = 0
+                state.results_cache_dirty = True
+                rebuild_results_cache()
                 n = len(payload)
-                state.status = (
-                    f'{n} word{"s" if n != 1 else ""} matched in {job.source_name}'
-                )
+                state.status = f'{n} word{"s" if n != 1 else ""} matched in {job.source_name}'
                 state.search_job = None
             elif kind == "error":
                 state.search_results = []
@@ -2291,7 +2695,7 @@ class AppState:
     def __init__(self):
         self.lm_word_length = 5  # Letter Match's word length
         self.ph_word_length = 5  # Pattern Hunt's word length (used when not "All")
-        self.max_preview = MAX_MAX_PREVIEW // 2
+        self.max_preview = MAX_MAX_PREVIEW // 4
         self.preview_start = 0
         self.input_scope = "single"
         self.greek_count = 0
@@ -2305,6 +2709,13 @@ class AppState:
         self._translation_cache = (
             {}
         )  # (lang, word) -> loaded json dict (lazy, per active_file)
+        self.colorize_status = True
+        self.status_filters = set(STATUS_KEYS)
+
+        self.results_status_map = {}
+        self.results_status_counts = Counter()
+        self.results_visible_words = []
+        self.results_cache_dirty = True
 
         # ── Letter Match state ──
         self.input_mode = "valid"  # valid / invalid / exist
@@ -2495,6 +2906,8 @@ summary_tk_root = None
 summary_win = None
 summary_text = None
 summary_open = False
+enrichment_choice_win = None
+manual_entry_win = None
 
 
 def get_tk_root():
@@ -2523,7 +2936,7 @@ def open_text_file(path):
 
 
 def format_set(s):
-    return " ".join("".join(sorted(x)) for x in s) if s else f"{special_caracters["-"]}"
+    return " ".join("".join(sorted(x)) for x in s) if s else f"{special_chars["-"]}"
 
 
 def open_summary_window():
@@ -2581,9 +2994,9 @@ def refresh_summary_window():
                     group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
                 label = "".join(group)
                 parts.append(f"{label} (x{count})" if count > 1 else label)
-            lines.append("  " + f" {special_caracters["*"]} ".join(parts))
+            lines.append("  " + f" {special_chars["*"]} ".join(parts))
         else:
-            lines.append(f"  {special_caracters["-"]}")
+            lines.append(f"  {special_chars["-"]}")
     else:
         # Pattern Hunt
         for row_name in ["start", "middle", "end"]:
@@ -2600,7 +3013,7 @@ def refresh_summary_window():
                         tag = " [expanded]" if exp else ""
                         lines.append(f"    {i+1}: {disp}{tag}")
                     else:
-                        lines.append(f"    {i+1}: {special_caracters["-"]}")
+                        lines.append(f"    {i+1}: {special_chars["-"]}")
             lines.append("")
     summary_text.delete("1.0", END)
     summary_text.insert("1.0", "\n".join(lines))
@@ -2654,6 +3067,88 @@ def refresh_words_counts():
     state.greek_count = len(load_words(state.greek_file))
     state.english_count = len(load_words(state.english_file))
     state.results_count = len(load_words(state.results_file))
+
+
+def rgb_hex(rgb):
+    return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
+
+
+def _sync_meanings_cache(path, data):
+    try:
+        _meanings_cache[path] = {"mtime": os.path.getmtime(path), "data": data}
+    except OSError:
+        _meanings_cache[path] = {"mtime": 0, "data": data}
+
+
+def save_manual_translation(word, translation, language):
+    path = state.english_meanings_file if language == "english" else state.greek_meanings_file
+    data = load_json_dict(path)
+    key = normalize_word(word)
+    existing = data.get(key, {})
+
+    senses = existing.get("senses")
+    if not isinstance(senses, list):
+        senses = []
+
+    cleaned = clean_translation(word, translation)
+
+    entry = dict(existing)
+    entry["input_word"] = word
+    if language == "english":
+        entry["greek_translation"] = cleaned
+    else:
+        entry["english_translation"] = cleaned
+    entry["senses"] = senses
+    entry["status"] = build_status(word, cleaned, senses)
+
+    data[key] = entry
+    save_json_atomic(path, data)
+    _sync_meanings_cache(path, data)
+    state.results_cache_dirty = True
+
+    return entry
+
+
+def save_manual_meaning(word, pos, definition, examples, language):
+    path = state.english_meanings_file if language == "english" else state.greek_meanings_file
+    data = load_json_dict(path)
+    key = normalize_word(word)
+    existing = data.get(key, {})
+
+    pos = (pos or "").strip()
+    definition = (definition or "").strip()
+    cleaned_examples = [str(ex).strip() for ex in examples if str(ex).strip()][:3]
+
+    senses = []
+    if pos or definition or cleaned_examples:
+        senses = [{
+            "part_of_speech": pos,
+            "definition": definition,
+            "examples": cleaned_examples,
+        }]
+
+    translation = (
+        existing.get("greek_translation")
+        if language == "english"
+        else existing.get("english_translation")
+    )
+    translation = clean_translation(word, translation)
+
+    entry = dict(existing)
+    entry["input_word"] = word
+    if language == "english":
+        entry["greek_translation"] = translation
+    else:
+        entry["english_translation"] = translation
+    entry["senses"] = senses
+    entry["status"] = build_status(word, translation, senses)
+
+    data[key] = entry
+    save_json_atomic(path, data)
+    _sync_meanings_cache(path, data)
+    state.results_cache_dirty = True
+
+    return entry
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2750,7 +3245,7 @@ def do_search():
     if not words:
         state.search_results = []
         state.status = (
-            f"No words loaded {special_caracters['-']} check: {state.active_file()}"
+            f"No words loaded {special_chars['-']} check: {state.active_file()}"
         )
         return
 
@@ -2804,7 +3299,7 @@ def do_save():
         to_save_words = [w for w in state.search_results if w not in excluded]
 
     if not to_save_words:
-        state.status = f"Nothing to save {special_caracters["-"]} run Search first."
+        state.status = f"Nothing to save {special_chars["-"]} run Search first."
         return
     path = state.results_file.strip() or save_file_dialog()
     if not path:
@@ -2816,7 +3311,7 @@ def do_save():
                 f.write(w + "\n")
         state.results_file = path
         state.results_count = len(load_words(path))
-        state.status = f"Saved {state.results_count} words {special_caracters[">"]} {os.path.basename(path)}"
+        state.status = f"Saved {state.results_count} words {special_chars[">"]} {os.path.basename(path)}"
     except Exception as e:
         state.status = f"Save error: {e}"
 
@@ -2840,10 +3335,10 @@ def do_translate_action():
     words = get_target_words()
     if not words:
         state.status = (
-            f"Nothing to translate {special_caracters['-']} run Search first."
+            f"Nothing to translate {special_chars['-']} run Search first."
         )
         return
-    job = EnrichmentJob("translate", words, state.language)
+    job = EnrichmentJob("translation", words, state.language)
     progress_modal.start(job, f"Translating {len(words)} word(s)…")
 
 
@@ -2853,7 +3348,7 @@ def do_get_meaning_action():
     refreshed, since WordNet senses require English) for the target words."""
     words = get_target_words()
     if not words:
-        state.status = f"Nothing to look up {special_caracters['-']} run Search first."
+        state.status = f"Nothing to look up {special_chars['-']} run Search first."
         return
     job = EnrichmentJob("meaning", words, state.language)
     progress_modal.start(job, f"Getting meaning for {len(words)} word(s)…")
@@ -2889,8 +3384,9 @@ def lookup_word_entry(word, language):
 def format_meaning_lines(entry, language):
     lines = []
     senses_limit = 10
+    examples_limit = 3
     if entry is None:
-        return [f"No saved meaning yet {special_caracters['-']} use Get Meaning."]
+        return [f"No saved meaning yet {special_chars['-']} use Get Meaning."]
 
     if language == "greek":
         note = entry.get("senses_note")
@@ -2899,7 +3395,7 @@ def format_meaning_lines(entry, language):
 
     senses = entry.get("senses") or []
     if not senses:
-        lines.append(f"No senses found {special_caracters['-']} try Get Meaning.")
+        lines.append(f"No senses found {special_chars['-']} try Get Meaning.")
     else:
         pos_names = {
             "n": "noun",
@@ -2915,10 +3411,41 @@ def format_meaning_lines(entry, language):
             definition = sense.get("definition", "")
             examples = sense.get("examples") or []
             lines.append(f"{i}. {pos}: {definition}")
-            for ex in examples[:1]:
+            for ex in examples[:examples_limit]:
                 lines.append(f"   eg: {ex}")
 
     return lines
+
+
+def get_word_status(word, language):
+    entry = lookup_word_entry(word, language)
+    return (entry or {}).get("status", "no_translation_no_meaning")
+
+
+def rebuild_results_cache():
+    counts = Counter({k: 0 for k in STATUS_KEYS})
+    status_map = {}
+
+    for w in state.search_results:
+        st = get_word_status(w, state.language)
+        status_map[w] = st
+        if st in counts:
+            counts[st] += 1
+
+    state.results_status_map = status_map
+    state.results_status_counts = counts
+    state.results_visible_words = [
+        w for w in state.search_results
+        if status_map.get(w) in state.status_filters
+    ]
+    state.results_cache_dirty = False
+
+
+def refresh_visible_results():
+    state.results_visible_words = [
+        w for w in state.search_results
+        if state.results_status_map.get(w) in state.status_filters
+    ]
 
 
 def get_word_translation(word, language):
@@ -2939,7 +3466,7 @@ def format_progress_result_lines(job_kind, entry, language):
     - meaning: translation line (if available) + meaning lines
     """
     if entry is None:
-        return [f"No saved result yet {special_caracters['-']} use the button again."]
+        return [f"No saved result yet {special_chars['-']} use the button again."]
 
     translation = (
         entry.get("greek_translation")
@@ -2947,14 +3474,14 @@ def format_progress_result_lines(job_kind, entry, language):
         else entry.get("english_translation")
     )
 
-    if job_kind == "translate":
+    if job_kind == "translation":
         if translation:
-            return [f"Translation {special_caracters['-']} {translation}"]
-        return [f"No translation found {special_caracters['-']} try Translate."]
+            return [f"Translation {special_chars['-']} {translation}"]
+        return [f"No translation found {special_chars['-']} try Translate."]
 
     lines = []
     if translation:
-        lines.append(f"Translation {special_caracters['-']} {translation}")
+        lines.append(f"Translation {special_chars['-']} {translation}")
     lines.extend(format_meaning_lines(entry, language))
     return lines
 
@@ -3010,12 +3537,12 @@ def render_header(mouse_pos):
     )
 
     hints1 = (
-        f"Backspace = Clear  {special_caracters["*"]}  Enter = Search  {special_caracters["*"]}  (Shift +) {special_caracters["<"]} {special_caracters[">"]} = Navigate  {special_caracters["*"]}  {special_caracters["^"]} {special_caracters["v"]} = Mode"
-        f"  {special_caracters["*"]}  Tab = Letter Match/Pattern Hunt  {special_caracters["*"]}  Shift+Space = Slot/All  {special_caracters["*"]}  Ctrl+Space = Expand (PH)"
+        f"Backspace = Clear  {special_chars["*"]}  Enter = Search  {special_chars["*"]}  (Shift +) {special_chars["<"]} {special_chars[">"]} = Navigate  {special_chars["*"]}  {special_chars["^"]} {special_chars["v"]} = Mode"
+        f"  {special_chars["*"]}  Tab = Letter Match/Pattern Hunt  {special_chars["*"]}  Shift+Space = Slot/All  {special_chars["*"]}  Ctrl+Space = Expand (PH)"
     )
     hints2 = (
-        f"/ = Greek/English  {special_caracters["*"]}  Ctrl+S = Save  {special_caracters["*"]}  Page Up/Down = Scroll  {special_caracters["*"]}  Shift+/- = Word length  {special_caracters["*"]}  Ctrl+/- = Max preview"
-        f"  {special_caracters["*"]}  +/- = Add/remove PH slot  {special_caracters["*"]}  Ctrl+I = Info"
+        f"/ = Greek/English  {special_chars["*"]}  Ctrl+S = Save  {special_chars["*"]}  Page Up/Down = Scroll  {special_chars["*"]}  Shift+/- = Word length  {special_chars["*"]}  Ctrl+/- = Max preview"
+        f"  {special_chars["*"]}  +/- = Add/remove PH slot  {special_chars["*"]}  Ctrl+I = Info"
     )
     blit_text(
         screen, hints1, FONT_SM, MUTED, PAD + 200, H_HEADER * 0.28, anchor="midleft"
@@ -3331,7 +3858,7 @@ def render_file_row(mouse_pos):
             screen, (GREEN if checked else BORDER), box, 2, border_radius=4
         )
         if checked:
-            img = FONT_LG.render(special_caracters["[OK]"], True, GREEN)
+            img = FONT_LG.render(special_chars["[OK]"], True, GREEN)
             screen.blit(img, img.get_rect(center=box.center))
         lbl_img = FONT_SM.render(label, True, TEXT)
         screen.blit(lbl_img, lbl_img.get_rect(midleft=(box.right + 8, box.centery)))
@@ -3350,7 +3877,7 @@ def render_file_row(mouse_pos):
     draw_button(
         screen,
         translate_btn,
-        "Translate",
+        "Translation",
         PURPLE,
         WHITE,
         radius=7,
@@ -3360,7 +3887,7 @@ def render_file_row(mouse_pos):
     draw_button(
         screen,
         meaning_btn,
-        "Get Meaning",
+        "Meaning",
         PURPLE,
         WHITE,
         radius=7,
@@ -3458,9 +3985,9 @@ def format_exist_letters(counter):
         label = "".join(group)
         parts.append(f"{label} (x{count})" if count > 1 else label)
     return (
-        f"  {special_caracters["*"]}  ".join(parts)
+        f"  {special_chars["*"]}  ".join(parts)
         if parts
-        else f"{special_caracters["-"]}"
+        else f"{special_chars["-"]}"
     )
 
 
@@ -3574,7 +4101,7 @@ def render_workspace_lm(mouse_pos):
             max_text_w = cell.width - 8
             display_letters = fit_text_with_ellipsis(letters, FONT_SM, max_text_w)
             img = FONT_SM.render(
-                display_letters or f"{special_caracters["-"]}",
+                display_letters or f"{special_chars["-"]}",
                 True,
                 TEXT if letters else MUTED,
             )
@@ -3583,7 +4110,7 @@ def render_workspace_lm(mouse_pos):
             lm_ui[f"{mode_str}_cells"].append((i, cell))
 
             if cell.collidepoint(mouse_pos):
-                letters_full = "".join(sorted(sets[i])) or f"{special_caracters["-"]}"
+                letters_full = "".join(sorted(sets[i])) or f"{special_chars["-"]}"
                 hover_text = f"{label} slot {i + 1}: {letters_full}"
                 hover_pos = mouse_pos
         table_y += row_h + 6
@@ -3641,7 +4168,7 @@ def render_workspace_lm(mouse_pos):
             if chip_x > exist_rect.right - 40:
                 break
     else:
-        img = FONT_SM.render(f"{special_caracters["-"]}", True, MUTED)
+        img = FONT_SM.render(f"{special_chars["-"]}", True, MUTED)
         screen.blit(img, img.get_rect(midleft=(PAD + 90, table_y + exist_row_h // 2)))
 
     table_y += exist_row_h + 6
@@ -3803,7 +4330,7 @@ def render_workspace_ph(mouse_pos):
                 disp = (
                     fit_text_with_ellipsis(disp_seq, FONT_SM, slot_w - 10)
                     if seq
-                    else f"{special_caracters["-"]}"
+                    else f"{special_chars["-"]}"
                 )
                 img = FONT_SM.render(
                     disp, True, PURPLE if expanded and seq else (TEXT if seq else MUTED)
@@ -3822,7 +4349,7 @@ def render_workspace_ph(mouse_pos):
                 )
 
                 e_img = FONT_SM.render(
-                    f"{special_caracters["~"]}", True, WHITE if expanded else MUTED
+                    f"{special_chars["~"]}", True, WHITE if expanded else MUTED
                 )
                 screen.blit(e_img, e_img.get_rect(center=exp_btn.center))
 
@@ -3867,12 +4394,18 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
     progress_h = draw_search_progress_bar(screen, panel)
 
-    n = len(state.search_results)
+    if state.results_cache_dirty:
+        rebuild_results_cache()
+
+    panel_words = state.results_visible_words
+    n = len(panel_words)
+
     if n:
-        state.clamp_preview_start()
+        state.preview_start = clamp(state.preview_start, 0, n - 1)
         start_index = state.preview_start + 1
         end_index = min(state.preview_start + state.max_preview, n)
     else:
+        state.preview_start = 0
         start_index = 0
         end_index = 0
 
@@ -3880,17 +4413,17 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     n_excl = sum(1 for v in state.word_selections.values() if v == "exclude")
     sel_parts = []
     if n_save:
-        sel_parts.append(f"{n_save} word(s) selected {special_caracters['[OK]']}")
+        sel_parts.append(f"{n_save} word(s) selected {special_chars['[OK]']}")
     if n_excl:
-        sel_parts.append(f"{n_excl} word(s) excluded X")
+        sel_parts.append(f"{n_excl} word(s) excluded {special_chars['X']}")
     sel_str = (
-        "  |  " + f"  {special_caracters['*']}  ".join(sel_parts) if sel_parts else ""
+        "  |  " + f"  {special_chars['*']}  ".join(sel_parts) if sel_parts else ""
     )
 
     top_y = panel.y + 10 + progress_h
     blit_text(screen, state.status, FONT_SM, MUTED, panel.x + PAD, top_y)
 
-    cnt = f"{n} total  {special_caracters['*']}  showing {start_index} - {end_index}"
+    cnt = f"{n} total  {special_chars['*']}  showing {start_index} - {end_index}"
     cnt_w = FONT_SM.size(cnt)[0]
     nav_w, nav_h, nav_gap = 22, 20, 6
     group_w = nav_w * 2 + nav_gap * 2 + cnt_w
@@ -3930,11 +4463,92 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
             anchor="midtop",
         )
 
-    preview = state.preview()
-    if not preview:
+    counts = state.results_status_counts
+
+    legend_items = [
+        ("ok", "ok"),
+        ("no_translation", "no translation"),
+        ("no_meaning", "no meaning"),
+        ("no_translation_no_meaning", "none"),
+    ]
+
+    legend_y = panel.bottom - 28
+
+    toggle_rect = pygame.Rect(panel.right - PAD - 86, legend_y - 11, 78, 22)
+    draw_button(
+        screen,
+        toggle_rect,
+        "color on" if state.colorize_status else "color off",
+        bg=TEAL if state.colorize_status else BROWN,
+        fg=WHITE,
+        radius=8,
+        hovered=toggle_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+
+    x = toggle_rect.left - 10
+    legend_rects = {}
+
+    for key, short_label in reversed(legend_items):
+        selected = key in state.status_filters
+        mark = special_chars["[OK]"] if selected else special_chars["X"]
+
+        label = f"{short_label} {counts.get(key, 0)}"
+        label_w = FONT_SM.size(label)[0]
+        chip_w = label_w + 42
+        chip_rect = pygame.Rect(x - chip_w, legend_y - 11, chip_w, 22)
+
+        if state.colorize_status:
+            fill = STATUS_BG.get(key, PANEL2)
+            border = STATUS_BDR.get(key, BORDER)
+        else:
+            fill = PANEL2
+            border = BORDER
+
+        pygame.draw.rect(screen, fill, chip_rect, border_radius=10)
+        pygame.draw.rect(screen, border, chip_rect, 1, border_radius=10)
+
+        mark_rect = pygame.Rect(chip_rect.x + 5, chip_rect.y + 5, 12, 12)
+
+        if selected:
+            mark_fill = GREEN_BG
+            mark_border = GREEN_BDR
+        else:
+            mark_fill = RED_BG
+            mark_border = RED_BDR
+
+        pygame.draw.rect(screen, mark_fill, mark_rect, border_radius=4)
+        pygame.draw.rect(screen, mark_border, mark_rect, 1, border_radius=4)
+
+        mark_img = FONT_SM.render(mark, True, TEXT)
+        screen.blit(mark_img, mark_img.get_rect(center=mark_rect.center))
+
         blit_text(
             screen,
-            f"No results yet {special_caracters['-']} press Enter or click Search.",
+            label,
+            FONT_SM,
+            TEXT,
+            mark_rect.right + 6,
+            chip_rect.centery,
+            anchor="midleft",
+        )
+
+        legend_rects[key] = chip_rect
+        x = chip_rect.left - 8
+
+    _results_legend_rects["toggle"] = toggle_rect
+    _results_legend_rects["items"] = legend_rects
+
+    preview = panel_words[state.preview_start : state.preview_start + state.max_preview]
+    if not preview:
+        msg = (
+            "No categories selected — click a legend chip to show results."
+            if not state.status_filters
+            else f"No results yet {special_chars['-']} press Enter or click Search."
+        )
+        blit_text(
+            screen,
+            msg,
             FONT_MD,
             MUTED,
             panel.x + PAD,
@@ -3954,23 +4568,31 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         row = idx // cols
         wx = panel.x + PAD + col * (cw + GAP)
         wy = grid_y + row * (ch_h + 4)
-        if wy + ch_h > panel.bottom - 8:
+        if wy + ch_h > panel.bottom - 44:
             break
 
         wr = pygame.Rect(wx, wy, cw, ch_h)
         is_hovered = wr.collidepoint(mouse_pos)
         sel_state = state.word_selections.get(word)
+        status = state.results_status_map.get(word, "no_translation_no_meaning")
 
         if sel_state == "save":
             bg_color = GREEN_BG
             bdr_color = GREEN_BDR
+            marker = special_chars["[OK]"]
         elif sel_state == "exclude":
             bg_color = RED_BG
             bdr_color = RED_BDR
+            marker = special_chars["X"]
         else:
-            bg_color = PANEL2
-            bdr_color = BORDER
-
+            if state.colorize_status:
+                bg_color = STATUS_BG.get(status, PANEL2)
+                bdr_color = STATUS_BDR.get(status, BORDER)
+            else:
+                bg_color = PANEL2
+                bdr_color = BORDER
+            marker = None
+        
         if is_hovered:
             draw_r = wr.inflate(int(wr.w * 0.1), int(wr.h * 0.1))
             _hover_word_rect = (word, wr)
@@ -3979,8 +4601,13 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
         pygame.draw.rect(screen, bg_color, draw_r, border_radius=6)
         pygame.draw.rect(screen, bdr_color, draw_r, 1, border_radius=6)
+
         wimg = FONT_SM.render(word, True, TEXT)
         screen.blit(wimg, wimg.get_rect(midleft=(draw_r.x + 8, draw_r.centery)))
+
+        if marker is not None:
+            m_img = FONT_SM.render(marker, True, TEXT)
+            screen.blit(m_img, m_img.get_rect(midright=(draw_r.right - 8, draw_r.centery)))
 
         _result_word_rects.append((word, wr))
 
@@ -3991,17 +4618,20 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         lines = []  # list of (text, font, color)
         lines.append((hword, FONT_LG, TEXT))
 
+        entry = lookup_word_entry(hword, state.language)
+
         if state.show_translation:
-            tr = get_word_translation(hword, state.language)
+            tr = None
+            if entry is not None:
+                tr = entry.get("greek_translation") if state.language == "english" else entry.get("english_translation")
             tr_text = (
-                f"{hword} {special_caracters['>']} {tr}"
+                f"{hword} {special_chars['>']} {tr}"
                 if tr
-                else f"{hword} {special_caracters['>']} (no translation yet)"
+                else f"{hword} {special_chars['>']} (no translation yet)"
             )
             lines.append((tr_text, FONT_MD, ACCENT))
 
         if state.show_meaning:
-            entry = lookup_word_entry(hword, state.language)
             for ml in format_meaning_lines(entry, state.language):
                 lines.append((ml, FONT_SM, MUTED))
 
@@ -4045,6 +4675,7 @@ if __name__ == "__main__":
     refresh_words_counts()
     info_modal = InfoModal()
     progress_modal = ProgressModal()
+    enrichment_modal = EnrichmentModal()
     dragging = None  # None | 'wl' | 'mp'
     running = True
 
@@ -4105,6 +4736,7 @@ if __name__ == "__main__":
         page_prev_rect, page_next_rect = render_results(tby, mouse_pos)
         info_modal.draw(screen, WIDTH, HEIGHT)
         progress_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        enrichment_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
 
         if summary_win is not None and summary_win.winfo_exists():
             try:
@@ -4130,16 +4762,20 @@ if __name__ == "__main__":
             info_modal.handle_event(event, WIDTH, HEIGHT)
             if modal_was_open:
                 continue
+
             progress_modal_was_open = progress_modal.visible
             progress_modal.handle_event(event, WIDTH, HEIGHT)
             if progress_modal_was_open:
+                continue
+
+            if enrichment_modal.handle_event(event, WIDTH, HEIGHT):
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
                 btn = event.button
 
-                if btn == 1:
+                if btn == 1:                        
                     # Sliders
                     if t1.collidepoint(mx, my) or k1.collidepoint(mx, my):
                         dragging = "wl"
@@ -4196,9 +4832,9 @@ if __name__ == "__main__":
 
                     # Translate / Get Meaning buttons
                     elif translate_btn.collidepoint(mx, my):
-                        do_translate_action()
+                        enrichment_modal.open_choice("translation")
                     elif meaning_btn.collidepoint(mx, my):
-                        do_get_meaning_action()
+                        enrichment_modal.open_choice("meaning")
 
                     # Info btn
                     elif _info_btn_rect.collidepoint(mx, my):
@@ -4220,9 +4856,11 @@ if __name__ == "__main__":
                     elif lang_rects[0].collidepoint(mx, my):
                         state.language = "greek"
                         state.status = "Language: Greek"
+                        state.results_cache_dirty = True
                     elif lang_rects[1].collidepoint(mx, my):
                         state.language = "english"
                         state.status = "Language: English"
+                        state.results_cache_dirty = True
 
                     # Search
                     elif search_rect.collidepoint(mx, my):
@@ -4365,6 +5003,25 @@ if __name__ == "__main__":
                                 else:
                                     state.word_selections[word] = "save"
                                 break
+
+                        # Results legend toggles
+                        if _results_legend_rects.get("toggle") is not None and _results_legend_rects["toggle"].collidepoint(mx, my):
+                            state.colorize_status = not state.colorize_status
+                            break
+
+                        clicked_legend = False
+                        for status_key, rect in _results_legend_rects.get("items", {}).items():
+                            if rect.collidepoint(mx, my):
+                                if status_key in state.status_filters:
+                                    state.status_filters.remove(status_key)
+                                else:
+                                    state.status_filters.add(status_key)
+                                refresh_visible_results()
+                                state.preview_start = 0
+                                clicked_legend = True
+                                break
+                        if clicked_legend:
+                            break
 
                 elif btn == 3:
                     # Right click: exclude/deselect in results
