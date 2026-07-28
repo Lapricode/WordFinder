@@ -2033,6 +2033,7 @@ class EnrichmentModal:
         self.get_action = None
 
     def open_choice(self, job_kind):
+        pygame.key.stop_text_input()
         progress_modal.close()
         self.visible = True
         self.stage = "choice"
@@ -2070,6 +2071,11 @@ class EnrichmentModal:
         self.word_scroll = 0
 
     def close(self):
+        # Restore text input for the main screen. open_choice() and
+        # open_manual() both turn text input off/on for their own needs;
+        # closing the modal must leave it ON, otherwise Greek letters
+        # can no longer be typed into the slots on the main screen.
+        pygame.key.start_text_input()
         self.visible = False
         self.stage = None
         self.job_kind = None
@@ -2078,7 +2084,6 @@ class EnrichmentModal:
         self.active_field = None
         self.fields = {}
         self.drafts = {}
-        pygame.key.stop_text_input()
         self.source_data = {}
         self.picker_open = False
         self.picker_scroll = 0
