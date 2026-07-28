@@ -53,7 +53,23 @@ pip install deep-translator nltk
 
 ## How to Run
 
-From the project directory:
+From the project directory, only the first time, extract the JSON files needed for translation and meaning processes.
+
+- Linux / macOS
+
+```bash
+gzip -dk words/greek_dictionary.json.gz
+gzip -dk words/english_dictionary.json.gz
+```
+
+- Windows (PowerShell or Command Prompt)
+
+```powershell
+tar -xzf words\greek_dictionary.json.gz
+tar -xzf words\english_dictionary.json.gz
+```
+
+And then run:
 
 ```bash
 python WordFinder.py
