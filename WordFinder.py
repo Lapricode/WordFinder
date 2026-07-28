@@ -2010,36 +2010,37 @@ class ProgressModal:
 class EnrichmentModal:
     def __init__(self):
         self.visible = False
-        self.stage = None          # "choice" | "manual"
-        self.job_kind = None       # "translation" | "meaning"
+        self.stage = None       # "choice" | "manual"
+        self.job_kind = None    # "translation" | "meaning"
         self.words = []
         self.word_index = 0
         self.language = "greek"
-        self.dropdown_open = False
-        self.dropdown_scroll = 0
         self.active_field = None
         self.fields = {}
         self.drafts = {}
         self._rects = {}
         self.word_scroll = 0
+        self.source_data = {}
+        self.picker_open = False
+        self.picker_scroll = 0
         self.applying = False
         self.apply_items = []
         self.apply_done = 0
         self.apply_total = 0
         self.apply_label = ""
+        self.get_action = None
 
     def open_choice(self, job_kind):
         progress_modal.close()
         self.visible = True
         self.stage = "choice"
         self.job_kind = job_kind
-        self.dropdown_open = False
-        self.dropdown_scroll = 0
         self.active_field = None
         self.fields = {}
         self.drafts = {}
         self._rects = {}
         self.word_scroll = 0
+        self.get_action = do_translate_action if job_kind == "translation" else do_get_meaning_action
 
     def open_manual(self, job_kind):
         progress_modal.close()
@@ -2054,8 +2055,9 @@ class EnrichmentModal:
         self.words = list(words)
         self.word_index = 0
         self.language = state.language
-        self.dropdown_open = False
-        self.dropdown_scroll = 0
+        self.source_data = _get_cached_json(self._path())
+        self.picker_open = False
+        self.picker_scroll = 0
         self.drafts = {}
         pygame.key.start_text_input()
         self._load_current()
@@ -2067,17 +2069,19 @@ class EnrichmentModal:
         self.job_kind = None
         self.words = []
         self.word_index = 0
-        self.dropdown_open = False
-        self.dropdown_scroll = 0
         self.active_field = None
         self.fields = {}
         self.drafts = {}
         pygame.key.stop_text_input()
+        self.source_data = {}
+        self.picker_open = False
+        self.picker_scroll = 0
         self.applying = False
         self.apply_items = []
         self.apply_done = 0
         self.apply_total = 0
         self.apply_label = ""
+        self.get_action = None
 
     def _path(self):
         return state.english_meanings_file if self.language == "english" else state.greek_meanings_file
@@ -2088,40 +2092,132 @@ class EnrichmentModal:
         return self.words[self.word_index]
 
     def _existing_entry(self, word):
-        data = load_json_dict(self._path())
-        return data.get(normalize_word(word), {}) or {}
+        return self.source_data.get(normalize_word(word), {}) or {}
+
+    def _original_field_value(self, entry, key):
+        if self.job_kind == "translation":
+            if self.language == "english":
+                return entry.get("greek_translation", "") or ""
+            return entry.get("english_translation", "") or ""
+
+        senses = entry.get("senses") or []
+
+        first_sense = senses[0] if len(senses) > 0 and isinstance(senses[0], dict) else {}
+        second_sense = senses[1] if len(senses) > 1 and isinstance(senses[1], dict) else {}
+        third_sense = senses[2] if len(senses) > 2 and isinstance(senses[2], dict) else {}
+
+        first_examples = first_sense.get("examples") or []
+        second_examples = second_sense.get("examples") or []
+        third_examples = third_sense.get("examples") or []
+
+        if key == "pos":
+            return first_sense.get("part_of_speech", "") or ""
+        if key == "def1":
+            return first_sense.get("definition", "") or ""
+        if key == "def2":
+            return second_sense.get("definition", "") or ""
+        if key == "def3":
+            return third_sense.get("definition", "") or ""
+        if key == "ex1":
+            return first_examples[0] if len(first_examples) > 0 else ""
+        if key == "ex2":
+            return second_examples[0] if len(second_examples) > 0 else ""
+        if key == "ex3":
+            return third_examples[0] if len(third_examples) > 0 else ""
+
+        return ""
+
+
+    def _field_is_dirty(self, word, key):
+        draft = self.drafts.get(word)
+        if not draft:
+            return False
+
+        if key == "translation":
+            current = draft.get("translation", "")
+        else:
+            current = draft.get(key, "")
+
+        original = self._original_field_value(self._existing_entry(word), key)
+        return str(current).strip() != str(original).strip() and str(current).strip() != ""
+
+
+    def _picker_item_rects(self, picker_rect):
+        if not self.words:
+            return []
+
+        row_h = 30
+        gap = 5
+        visible = max(1, (picker_rect.height - 16) // (row_h + gap))
+        start = clamp(self.picker_scroll, 0, max(0, len(self.words) - visible))
+
+        rects = []
+        for i, word in enumerate(self.words[start:start + visible], start=start):
+            r = pygame.Rect(
+                picker_rect.x + 12,
+                picker_rect.y + 8 + (i - start) * (row_h + gap),
+                picker_rect.width - 24,
+                row_h,
+            )
+            rects.append((i, word, r))
+        return rects
 
     def _load_current(self):
         word = self._current_word()
         if not word:
             return
 
-        entry = self.drafts.get(word) or self._existing_entry(word)
+        draft = self.drafts.get(word)
 
         if self.job_kind == "translation":
-            existing_translation = (
-                entry.get("greek_translation")
-                if self.language == "english"
-                else entry.get("english_translation")
-            )
-            self.fields = {"translation": existing_translation or ""}
-            self.active_field = "translation"
-        else:
-            senses = entry.get("senses") or []
-            first = senses[0] if senses else {}
-            second = senses[1] if len(senses) > 1 else {}
-            third = senses[2] if len(senses) > 2 else {}
+            if draft is not None:
+                translation = draft.get("translation", "")
+            else:
+                entry = self._existing_entry(word)
+                translation = (
+                    entry.get("greek_translation")
+                    if self.language == "english"
+                    else entry.get("english_translation")
+                ) or ""
 
+            self.fields = {"translation": translation}
+            self.active_field = "translation"
+            return
+
+        if draft is not None:
             self.fields = {
-                "pos": first.get("part_of_speech", ""),
-                "def1": first.get("definition", ""),
-                "def2": second.get("definition", ""),
-                "def3": third.get("definition", ""),
-                "ex1": (first.get("examples") or [""])[0] if first.get("examples") else "",
-                "ex2": (first.get("examples") or ["", ""])[1] if len(first.get("examples") or []) > 1 else "",
-                "ex3": (first.get("examples") or ["", "", ""])[2] if len(first.get("examples") or []) > 2 else "",
+                "pos": draft.get("pos", ""),
+                "def1": draft.get("def1", ""),
+                "def2": draft.get("def2", ""),
+                "def3": draft.get("def3", ""),
+                "ex1": draft.get("ex1", ""),
+                "ex2": draft.get("ex2", ""),
+                "ex3": draft.get("ex3", ""),
             }
             self.active_field = "pos"
+            return
+
+        entry = self._existing_entry(word)
+        senses = entry.get("senses") or []
+
+        first_sense = senses[0] if len(senses) > 0 and isinstance(senses[0], dict) else {}
+        second_sense = senses[1] if len(senses) > 1 and isinstance(senses[1], dict) else {}
+        third_sense = senses[2] if len(senses) > 2 and isinstance(senses[2], dict) else {}
+
+        first_examples = first_sense.get("examples") or []
+        second_examples = second_sense.get("examples") or []
+        third_examples = third_sense.get("examples") or []
+
+        self.fields = {
+            "pos": first_sense.get("part_of_speech", "") or "",
+            "def1": first_sense.get("definition", "") or "",
+            "def2": second_sense.get("definition", "") or "",
+            "def3": third_sense.get("definition", "") or "",
+            "ex1": first_examples[0] if len(first_examples) > 0 else "",
+            "ex2": second_examples[0] if len(second_examples) > 0 else "",
+            "ex3": third_examples[0] if len(third_examples) > 0 else "",
+        }
+        self.active_field = "pos"
 
     def _snapshot_current(self):
         word = self._current_word()
@@ -2146,46 +2242,20 @@ class EnrichmentModal:
         if not word:
             return
 
-        # Keep edits in memory only.
         self._snapshot_current()
-        state.status = f"Staged {self.job_kind} for {word} (not saved yet)"
-
-        if self.job_kind == "translation":
-            entry = save_manual_translation(word, self.fields.get("translation", ""), self.language)
-        else:
-            entry = save_manual_meaning(
-                word,
-                self.fields.get("pos", ""),
-                [
-                    self.fields.get("def1", ""),
-                    self.fields.get("def2", ""),
-                    self.fields.get("def3", ""),
-                ],
-                [
-                    self.fields.get("ex1", ""),
-                    self.fields.get("ex2", ""),
-                    self.fields.get("ex3", ""),
-                ],
-                self.language,
-            )
-
-        state.results_cache_dirty = True
-        rebuild_results_cache()
-        refresh_visible_results()
-        state.status = f"Saved manual {self.job_kind} for {word}"
-        return entry
+        state.status = f"Staged {self.job_kind} for {word} (press Apply to save)"
 
     def _apply_all(self):
         self._snapshot_current()
         self.apply_items = list(self.drafts.items())
-        if not self.apply_items:
-            state.status = "Nothing to apply."
-            return
-
         self.apply_total = len(self.apply_items)
         self.apply_done = 0
-        self.applying = True
-        self.apply_label = f"Applying {self.apply_total} word(s)…"
+        self.applying = bool(self.apply_items)
+
+        if self.applying:
+            state.status = f"Applying {self.apply_total} staged edit(s)…"
+        else:
+            state.status = "Nothing to save."
 
     def _apply_step(self, batch=1):
         if not self.applying:
@@ -2210,12 +2280,14 @@ class EnrichmentModal:
 
         if not self.apply_items:
             self.applying = False
-            self.apply_label = f"Applied {self.apply_done} word(s)."
-            state.status = self.apply_label
+            self.source_data = _get_cached_json(self._path())
+            self.drafts.clear()
+            self._load_current()
             state.results_cache_dirty = True
             rebuild_results_cache()
             refresh_visible_results()
-        
+            state.status = f"Saved {self.apply_done} staged edit(s)"
+
     def _panel_rect(self, W, H):
         if self.stage == "choice":
             pw = min(420, W - 120)
@@ -2276,7 +2348,7 @@ class EnrichmentModal:
                     if self.job_kind == "translation":
                         self.active_field = "translation"
                     else:
-                        order = ["pos", "def1", "def2", "def3", "ex1", "ex2", "ex3"]
+                        order = ["pos", "def1", "ex1", "def2", "ex2", "def3", "ex3"]
                         idx = order.index(self.active_field) if self.active_field in order else 0
                         self.active_field = order[(idx + 1) % len(order)]
                     return True
@@ -2285,12 +2357,17 @@ class EnrichmentModal:
                     self._apply_current()
                     return True
 
-                if event.key == pygame.K_UP and self.dropdown_open:
-                    self.dropdown_scroll = max(0, self.dropdown_scroll - 1)
+                if event.key == pygame.K_UP and self.picker_open:
+                    self.picker_scroll = max(0, self.picker_scroll - 1)
                     return True
 
-                if event.key == pygame.K_DOWN and self.dropdown_open:
-                    self.dropdown_scroll = min(max(0, len(self.words) - 5), self.dropdown_scroll + 1)
+                if event.key == pygame.K_DOWN and self.picker_open:
+                    picker = self._rects.get("picker")
+                    visible = max(1, ((picker.height - 16) // (30 + 8)) if picker else 1)
+                    self.picker_scroll = min(
+                        max(0, len(self.words) - visible),
+                        self.picker_scroll + 1,
+                    )
                     return True
 
                 if event.key == pygame.K_BACKSPACE and self.active_field:
@@ -2303,24 +2380,18 @@ class EnrichmentModal:
                         self.fields[self.active_field] = self.fields.get(self.active_field, "") + ch
                         return True
 
-        if event.type == pygame.MOUSEWHEEL and self.stage == "manual":
-            panel = self._panel_rect(W, H)
-            if self.words:
-                btn_w = 150
-                btn_h = 26
-                gap = 8
-                cols = max(2, (panel.width - 48 + gap) // (btn_w + gap))
-                per_page = max(1, cols * 2)
-                self.word_scroll = clamp(
-                    self.word_scroll - event.y,
+        if event.type == pygame.MOUSEWHEEL and self.stage == "manual" and self.picker_open:
+            picker = self._rects.get("picker")
+            if picker and picker.collidepoint(pygame.mouse.get_pos()):
+                visible = max(1, (picker.height - 16) // (30 + 8))
+                self.picker_scroll = clamp(
+                    self.picker_scroll - event.y,
                     0,
-                    max(0, len(self.words) - per_page),
+                    max(0, len(self.words) - visible),
                 )
                 return True
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-            mx, my = event.pos
-
             if not panel.collidepoint(event.pos):
                 if self.stage == "choice":
                     self.close()
@@ -2332,21 +2403,33 @@ class EnrichmentModal:
                 if set_btn and set_btn.collidepoint(event.pos):
                     self.open_manual(self.job_kind)
                 elif get_btn and get_btn.collidepoint(event.pos):
+                    action = self.get_action or (
+                        do_translate_action if self.job_kind == "translation" else do_get_meaning_action
+                    )
                     self.close()
-                    if self.job_kind == "translation":
-                        do_translate_action()
-                    else:
-                        do_get_meaning_action()
-
+                    action()
                 return True
 
             if self.stage == "manual":
-                for idx, word, r in self._word_button_rects(panel):
-                    if r.collidepoint(event.pos):
-                        self._snapshot_current()
-                        self.word_index = idx
-                        self._load_current()
-                        return True
+                selector = self._rects.get("selector")
+                picker = self._rects.get("picker")
+
+                if selector and selector.collidepoint(event.pos):
+                    self.picker_open = not self.picker_open
+                    return True
+
+                if self.picker_open and picker and picker.collidepoint(event.pos):
+                    for idx, word, r in self._picker_item_rects(picker):
+                        if r.collidepoint(event.pos):
+                            self._snapshot_current()
+                            self.word_index = idx
+                            self._load_current()
+                            self.picker_open = False
+                            return True
+
+                if self.picker_open:
+                    self.picker_open = False
+                    return True
 
                 for key, r in self._rects.get("fields", {}).items():
                     if r.collidepoint(event.pos):
@@ -2370,7 +2453,9 @@ class EnrichmentModal:
     def draw(self, surface, W, H, mouse_pos):
         if not self.visible:
             return
-
+        if self.applying:
+            self._apply_step(batch=1)
+            
         overlay = pygame.Surface((W, H), pygame.SRCALPHA)
         overlay.fill((0, 0, 0, 180))
         surface.blit(overlay, (0, 0))
@@ -2403,67 +2488,46 @@ class EnrichmentModal:
         blit_text(surface, title, FONT_LG, TEXT, panel.x + 24, panel.y + 18)
         blit_text(
             surface,
-            "Click a word button to edit it. Enter saves the current word changes. Apply saves all edits.",
+            "Click the centered list to switch words. Enter stages the current word edits. Apply saves all staged edits.",
             FONT_SM,
             MUTED,
             panel.x + 24,
             panel.y + 48,
         )
 
-        self._rects = {"fields": {}, "apply": None, "close": None}
+        self._rects = {"fields": {}, "apply": None, "close": None, "selector": None, "picker": None}
 
-        if self.applying:
-            self._apply_step(batch=1)
-
-        word_buttons = self._word_button_rects(panel)
-        for idx, word, r in word_buttons:
-            selected = idx == self.word_index
-            hovered = r.collidepoint(mouse_pos)
-
-            fill = BLUE_BG if selected else PANEL2
-            border = ACCENT if selected else BORDER
-            if hovered:
-                fill = lighten(fill, 12)
-                border = lighten(border, 12)
-
-            draw_panel(surface, r, fill, border, radius=8)
-            blit_text(
-                surface,
-                fit_text_with_ellipsis(word, FONT_SM, r.width - 10),
-                FONT_SM,
-                TEXT,
-                r.centerx,
-                r.centery,
-                anchor="center",
-            )
-
-        last_btn_bottom = max((r.bottom for _, _, r in word_buttons), default=panel.y + 130)
-        field_y = last_btn_bottom + 30
+        field_y = panel.y + 135
         field_h = 30
         field_w = panel.width - 48
         left = panel.x + 24
 
-        def field(label, key, y, height=40):
-            blit_text(surface, label, FONT_SM, MUTED, left, y - 22)
+        def field(label, key, y, height=30):
+            blit_text(surface, label, FONT_SM, MUTED, left, y - 20)
             r = pygame.Rect(left, y, field_w, height)
             self._rects["fields"][key] = r
             active = self.active_field == key
             draw_panel(surface, r, BLUE_BG if active else PANEL2, ACCENT if active else BORDER, radius=8)
             text = self.fields.get(key, "")
-            txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 12)
-            blit_text(surface, txt, FONT_SM, TEXT, r.x + 6, r.centery, anchor="midleft")
-            return r.bottom + 22
+            txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 24)
+            blit_text(surface, txt, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+
+            if self._field_is_dirty(self._current_word(), key):
+                tick = FONT_SM.render(special_chars["[OK]"], True, GREEN)
+                surface.blit(tick, tick.get_rect(midright=(r.right - 10, r.centery)))
+
+            return r.bottom + 23
 
         if self.job_kind == "translation":
-            field_y = field("Translation", "translation", field_y, field_h)
+            field_y = field("Translation:", "translation", field_y, field_h)
         else:
-            field_y = field("Part of speech", "pos", field_y, field_h)
-            field_y = field("Definition 1", "def1", field_y, field_h)
-            field_y = field("Definition 2", "def2", field_y, field_h)
-            field_y = field("Definition 3", "def3", field_y, field_h)
-            field_y = field("Example 1", "ex1", field_y, field_h)
-            field_y = field("Example 2", "ex2", field_y, field_h)
-            field_y = field("Example 3", "ex3", field_y, field_h)
+            field_y = field("Part of speech (n-noun, v-verb, a/s-adjective, r-adverb):", "pos", field_y, field_h)
+            field_y = field("Definition 1:", "def1", field_y, field_h)
+            field_y = field("Example 1:", "ex1", field_y, field_h)
+            field_y = field("Definition 2:", "def2", field_y, field_h)
+            field_y = field("Example 2:", "ex2", field_y, field_h)
+            field_y = field("Definition 3:", "def3", field_y, field_h)
+            field_y = field("Example 3:", "ex3", field_y, field_h)
 
         bar_rect = pygame.Rect(panel.x + 24, panel.bottom - 65, panel.width - 48, 18)
         if self.applying:
@@ -2507,17 +2571,59 @@ class EnrichmentModal:
             font=FONT_SM,
         )
 
+        selector = pygame.Rect(panel.centerx - 150, panel.y + 76, 300, 32)
+        self._rects["selector"] = selector
+        draw_button(
+            surface,
+            selector,
+            fit_text_with_ellipsis(self._current_word(), FONT_SM, selector.width - 20),
+            bg=BLUE_BG,
+            fg=TEXT,
+            hovered=selector.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        if self.picker_open:
+            picker = pygame.Rect(selector.x, selector.y + 40, selector.w, min(340, panel.height - 130))
+            self._rects["picker"] = picker
+            draw_panel(surface, picker, PANEL2, BORDER, radius=12)
+
+            for idx, word, r in self._picker_item_rects(picker):
+                selected = idx == self.word_index
+                hovered = r.collidepoint(mouse_pos)
+
+                fill = BLUE_BG if selected else PANEL
+                border = ACCENT if selected else BORDER
+                if hovered:
+                    fill = lighten(fill, 12)
+                    border = lighten(border, 12)
+
+                pygame.draw.rect(surface, fill, r, border_radius=8)
+                pygame.draw.rect(surface, border, r, 1, border_radius=8)
+                blit_text(
+                    surface,
+                    fit_text_with_ellipsis(word, FONT_SM, r.width - 28),
+                    FONT_SM,
+                    TEXT,
+                    r.x + 10,
+                    r.centery,
+                    anchor="midleft",
+                )
+
+                if self._field_is_dirty(word, "translation" if self.job_kind == "translation" else "def1"):
+                    tick = FONT_SM.render(special_chars["[OK]"], True, GREEN)
+                    surface.blit(tick, tick.get_rect(midright=(r.right - 10, r.centery)))
+
 
 # ══════════════════════════════════════════════════════════════════
 #  Background enrichment worker (runs in a thread, reports via queue)
 # ══════════════════════════════════════════════════════════════════
 
-
 def build_enrichment_entry(job_kind, language, word, existing):
     """
-    Reuse already-known translation/meaning data when it is already present.
     Translation jobs only fetch translation.
     Meaning jobs only fetch meaning.
+    Existing fields that are not being updated are preserved.
     """
     entry = dict(existing or {})
     entry["input_word"] = word
@@ -2646,10 +2752,8 @@ class EnrichmentJob:
             existing = data.get(key, {})
 
             try:
-                entry = build_enrichment_entry(self.job_kind, self.language, word, existing)
-                data[key] = entry
-                # if self.language == "english":
-                #     if self.job_kind == "translation":
+                # if self.job_kind == "translation":
+                #     if self.language == "english":
                 #         greek_translation = get_greek_translation(word)
                 #         entry = {
                 #             "input_word": word,
@@ -2657,18 +2761,7 @@ class EnrichmentJob:
                 #             "senses": existing.get("senses", []),
                 #             "status": build_status(word, greek_translation, existing.get("senses", [])),
                 #         }
-                #         data[key] = entry
                 #     else:
-                #         senses = get_wordnet_senses(word)
-                #         entry = {
-                #             "input_word": word,
-                #             "greek_translation": existing.get("greek_translation"),
-                #             "senses": senses,
-                #             "status": build_status(word, existing.get("greek_translation"), senses),
-                #         }
-                #         data[key] = entry
-                # else:
-                #     if self.job_kind == "translation":
                 #         english_translation = get_english_translation(word)
                 #         entry = {
                 #             "input_word": word,
@@ -2676,7 +2769,15 @@ class EnrichmentJob:
                 #             "senses": existing.get("senses", []),
                 #             "status": build_status(word, english_translation, existing.get("senses", [])),
                 #         }
-                #         data[key] = entry
+                # else:
+                #     if self.language == "english":
+                #         senses = get_wordnet_senses(word)
+                #         entry = {
+                #             "input_word": word,
+                #             "greek_translation": existing.get("greek_translation"),
+                #             "senses": senses,
+                #             "status": build_status(word, existing.get("greek_translation"), senses),
+                #         }
                 #     else:
                 #         english_translation = existing.get("english_translation")
                 #         senses = get_wordnet_senses(english_translation) if english_translation else []
@@ -2686,7 +2787,10 @@ class EnrichmentJob:
                 #             "senses": senses,
                 #             "status": build_status(word, english_translation, senses),
                 #         }
-                #         data[key] = entry
+                # data[key] = entry
+
+                entry = build_enrichment_entry(self.job_kind, self.language, word, existing)
+                data[key] = entry
 
                 pending_writes += 1
                 if pending_writes >= ENRICHMENT_SAVE_EVERY_WORDS or idx == self.total - 1:
@@ -3334,11 +3438,15 @@ def save_manual_meaning(word, pos, definitions, examples, language):
 
     senses = []
     for i, definition in enumerate(cleaned_definitions):
+        sense_examples = []
+        if i < len(cleaned_examples):
+            sense_examples = [cleaned_examples[i]]
+
         senses.append(
             {
                 "part_of_speech": pos,
                 "definition": definition,
-                "examples": cleaned_examples if i == 0 else [],
+                "examples": sense_examples,
             }
         )
 
@@ -5056,7 +5164,7 @@ if __name__ == "__main__":
                     elif meaning_chk_rect.collidepoint(mx, my):
                         state.show_meaning = not state.show_meaning
 
-                    # Translate / Get Meaning buttons
+                    # Translation / Meaning buttons
                     elif translate_btn.collidepoint(mx, my):
                         enrichment_modal.open_choice("translation")
                     elif meaning_btn.collidepoint(mx, my):
