@@ -832,7 +832,7 @@ else:  # Linux
     )
 
 FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
-FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14)
+FONT_SM = pygame.font.SysFont(FONT_FAMILY, 14, bold=True)
 FONT_MD = pygame.font.SysFont(FONT_FAMILY, 18, bold=True)
 FONT_LG = pygame.font.SysFont(FONT_FAMILY, 26, bold=True)
 FONT_XL = pygame.font.SysFont(FONT_FAMILY, 32, bold=True)
@@ -2321,7 +2321,7 @@ class EnrichmentModal:
             pw = min(420, W - 120)
             ph = min(170, H - 120)
         elif self.job_kind == "translation":
-            pw = min(760, W - 80)
+            pw = min(820, W - 80)
             ph = min(400, H - 80)
         else:
             pw = min(820, W - 80)
@@ -2551,7 +2551,7 @@ class EnrichmentModal:
         blit_text(surface, title, FONT_LG, TEXT, panel.x + 24, panel.y + 18)
         blit_text(
             surface,
-            "Click the centered list to switch words. Enter stages the current word edits. Apply saves all staged edits.",
+            "Click the centered list to switch words. Enter stages the current word edits and Apply saves all of them.",
             FONT_SM,
             MUTED,
             panel.x + 24,
