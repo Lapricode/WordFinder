@@ -97,8 +97,8 @@ Use the red mode button or press **Tab** to switch between:
 
 ### 5) Enrich results
 
-- Click **Translate** to fetch translations for the current selection
-- Click **Get Meaning** to fetch meanings for the current selection
+- Click **Translation** to manually write or automatically fetch translations for the current selection
+- Click **Meaning** to manually write or automatically fetch meanings for the current selection
 - Watch the progress modal for per-word output and completion status
 
 ## Controls
