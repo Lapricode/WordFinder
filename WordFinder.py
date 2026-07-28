@@ -388,8 +388,7 @@ def _check_middle_exist(word, exist_pats):
     if not exist_pats:
         return True
 
-    # Strictly interior only: exclude first and last character positions.
-    interior = word[1:-1]
+    interior = word
     if not interior:
         return False
 
