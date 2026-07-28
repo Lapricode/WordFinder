@@ -1404,21 +1404,13 @@ class InfoModal:
         ("", "gap"),
         ("Translations & Meanings", "heading"),
         (
-            "The Translate and Get Meaning buttons first ask whether you want Set or Get.",
-            "body",
-        ),
-        (
-            "Get runs the automatic lookup. Set opens a manual editor with a word droplist.",
-            "body",
-        ),
-        (
-            f"Show translation {special_chars["-"]} hovering a word shows "
+            f"Show Translation {special_chars["-"]} hovering a word shows "
             f"[word] {special_chars[">"]} [translation] using the saved "
             "translation JSON files.",
             "bullet",
         ),
         (
-            f"Show meaning {special_chars["-"]} hovering a word shows its "
+            f"Show Meaning {special_chars["-"]} hovering a word shows its "
             "part of speech, definition, and an example, pulled from the saved "
             "meanings JSON file (English words only; Greek words show their "
             "saved English translation instead, since dictionary senses are "
@@ -1427,10 +1419,15 @@ class InfoModal:
         ),
         ("", "gap"),
         (
-            "The Translate and Get Meaning buttons (next to the checkboxes) run "
+            "The Translation and Meaning buttons (below the checkboxes) run "
             "on the current results selection: if any words are marked to save "
             "(green), only those are processed; otherwise every result except "
             "excluded (red) words is processed.",
+            "body",
+        ),
+        (
+            "The Translation and Meaning buttons first ask whether you want Set or Get. "
+            "Get runs the automatic lookup. Set opens a manual editor with a word droplist.",
             "body",
         ),
         (
@@ -1445,8 +1442,8 @@ class InfoModal:
         (
             "The top of the results panel shows how many words are currently "
             f'selected and excluded, e.g. "12 words selected {special_chars['[OK]']}" and "3 words '
-            f'excluded {special_chars['X']}". This selection is shared by Save, Translate, and '
-            "Get Meaning.",
+            f'excluded {special_chars['X']}". This selection is shared by Save, Translation, and '
+            "Meaning.",
             "body",
         ),
         ("", "gap"),
@@ -1658,8 +1655,8 @@ class InfoModal:
 
 
 class ProgressModal:
-    """Full-screen dimmed overlay showing progress of a running Translate /
-    Get Meaning job: a progress bar plus a scrolling log of completed words,
+    """Full-screen dimmed overlay showing progress of a running Translation /
+    Meaning job: a progress bar plus a scrolling log of completed words,
     with the processed result shown next to each word."""
 
     def __init__(self):
@@ -2681,7 +2678,7 @@ def build_enrichment_entry(job_kind, language, word, existing):
 
 
 class EnrichmentJob:
-    """Runs Translate / Get Meaning over a word list on a background thread,
+    """Runs Translation / Meaning over a word list on a background thread,
     writing results into the correct JSON file as it goes, and reporting
     progress back to the main thread through a thread-safe queue."""
 
@@ -3640,7 +3637,7 @@ def do_save():
 
 def get_target_words():
     """
-    Target words for Save / Translate / Get Meaning.
+    Target words for Save / Translation / Meaning.
 
     Priority:
     1) marked "save" words
@@ -3718,7 +3715,7 @@ def format_meaning_lines(entry, language):
     senses_limit = 10
     examples_limit = 3
     if entry is None:
-        return [f"No saved meaning yet {special_chars['-']} use Get Meaning."]
+        return [f"No saved meaning yet {special_chars['-']} use Meaning."]
 
     if language == "greek":
         note = entry.get("senses_note")
@@ -3727,7 +3724,7 @@ def format_meaning_lines(entry, language):
 
     senses = entry.get("senses") or []
     if not senses:
-        lines.append(f"No senses found {special_chars['-']} try Get Meaning.")
+        lines.append(f"No senses found {special_chars['-']} try Meaning.")
     else:
         pos_names = {
             "n": "noun",
