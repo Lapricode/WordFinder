@@ -819,7 +819,7 @@ SYSTEM = platform.system()
 
 if SYSTEM == "Windows":
     FONT_FAMILY = pick_font(
-        ["Segoe UI", "Arial", "DejaVu Sans", "Noto Sans", "Liberation Sans"]
+        ["Segoe UI Symbol", "Segoe UI", "Arial", "DejaVu Sans", "Noto Sans", "Liberation Sans"]
     )
 elif SYSTEM == "Darwin":  # macOS
     FONT_FAMILY = pick_font(
@@ -827,7 +827,7 @@ elif SYSTEM == "Darwin":  # macOS
     )
 else:  # Linux
     FONT_FAMILY = pick_font(
-        ["DejaVu Sans", "Noto Sans", "Liberation Sans", "Arial", "Segoe UI"]
+        ["DejaVu Sans", "Noto Sans", "Liberation Sans", "Arial", "Segoe UI Symbol", "Segoe UI"]
     )
 
 FONT_DEFAULT = pygame.font.SysFont(FONT_FAMILY, 17)
@@ -2009,6 +2009,8 @@ class ProgressModal:
 
 
 class EnrichmentModal:
+    MAX_SENSES = 10
+
     def __init__(self):
         self.visible = False
         self.stage = None  # "choice" | "manual"
@@ -2030,6 +2032,8 @@ class EnrichmentModal:
         self.apply_total = 0
         self.apply_label = ""
         self.get_action = None
+        self.sense_index = 0  # which of the 1-10 definition slots is active
+        self._hover_field_key = None  # field key currently hovered, for popup
 
     def open_choice(self, job_kind):
         pygame.key.stop_text_input()
@@ -2042,6 +2046,7 @@ class EnrichmentModal:
         self.drafts = {}
         self._rects = {}
         self.word_scroll = 0
+        self.sense_index = 0
         self.get_action = (
             do_translate_action if job_kind == "translation" else do_get_meaning_action
         )
@@ -2065,6 +2070,7 @@ class EnrichmentModal:
         self.picker_open = False
         self.picker_scroll = 0
         self.drafts = {}
+        self.sense_index = 0
         pygame.key.start_text_input()
         self._load_current()
         self.word_scroll = 0
@@ -2108,44 +2114,52 @@ class EnrichmentModal:
     def _existing_entry(self, word):
         return self.source_data.get(normalize_word(word), {}) or {}
 
-    def _original_field_value(self, entry, key):
+    @staticmethod
+    def _sense_at(senses, idx):
+        """Return the sense dict at idx from a raw JSON senses list, or {}."""
+        if 0 <= idx < len(senses) and isinstance(senses[idx], dict):
+            return senses[idx]
+        return {}
+
+    def _original_field_value(self, entry, key, sense_idx=None):
         if self.job_kind == "translation":
             if self.language == "english":
                 return entry.get("greek_translation", "") or ""
             return entry.get("english_translation", "") or ""
 
+        if sense_idx is None:
+            sense_idx = self.sense_index
+
         senses = entry.get("senses") or []
-
-        first_sense = (
-            senses[0] if len(senses) > 0 and isinstance(senses[0], dict) else {}
-        )
-        second_sense = (
-            senses[1] if len(senses) > 1 and isinstance(senses[1], dict) else {}
-        )
-        third_sense = (
-            senses[2] if len(senses) > 2 and isinstance(senses[2], dict) else {}
-        )
-
-        first_examples = first_sense.get("examples") or []
-        second_examples = second_sense.get("examples") or []
-        third_examples = third_sense.get("examples") or []
+        sense = self._sense_at(senses, sense_idx)
+        examples = sense.get("examples") or []
 
         if key == "pos":
-            return first_sense.get("part_of_speech", "") or ""
-        if key == "def1":
-            return first_sense.get("definition", "") or ""
-        if key == "def2":
-            return second_sense.get("definition", "") or ""
-        if key == "def3":
-            return third_sense.get("definition", "") or ""
+            return sense.get("part_of_speech", "") or ""
+        if key == "def":
+            return sense.get("definition", "") or ""
         if key == "ex1":
-            return first_examples[0] if len(first_examples) > 0 else ""
+            return examples[0] if len(examples) > 0 else ""
         if key == "ex2":
-            return second_examples[0] if len(second_examples) > 0 else ""
+            return examples[1] if len(examples) > 1 else ""
         if key == "ex3":
-            return third_examples[0] if len(third_examples) > 0 else ""
+            return examples[2] if len(examples) > 2 else ""
 
         return ""
+
+    def _slot_has_definition(self, word, sense_idx):
+        """True if slot `sense_idx` (1-10 button) has a non-empty definition,
+        checking the in-progress draft first and falling back to saved JSON."""
+        draft = self.drafts.get(word)
+        if draft is not None:
+            slots = draft.get("senses") or []
+            if 0 <= sense_idx < len(slots):
+                return bool(str(slots[sense_idx].get("def", "")).strip())
+            return False
+
+        entry = self._existing_entry(word)
+        sense = self._sense_at(entry.get("senses") or [], sense_idx)
+        return bool(str(sense.get("definition", "")).strip())
 
     def _field_is_dirty(self, word, key):
         draft = self.drafts.get(word)
@@ -2154,10 +2168,18 @@ class EnrichmentModal:
 
         if key == "translation":
             current = draft.get("translation", "")
+            original = self._original_field_value(self._existing_entry(word), key)
         else:
-            current = draft.get(key, "")
+            slots = draft.get("senses") or []
+            current = (
+                slots[self.sense_index].get(key, "")
+                if 0 <= self.sense_index < len(slots)
+                else ""
+            )
+            original = self._original_field_value(
+                self._existing_entry(word), key, self.sense_index
+            )
 
-        original = self._original_field_value(self._existing_entry(word), key)
         return (
             str(current).strip() != str(original).strip() and str(current).strip() != ""
         )
@@ -2182,14 +2204,35 @@ class EnrichmentModal:
             rects.append((i, word, r))
         return rects
 
+    def _seed_meaning_draft(self, word):
+        """Build a MAX_SENSES-slot draft list for `word` from saved JSON,
+        without overwriting a draft that's already in progress."""
+        if word in self.drafts:
+            return
+        entry = self._existing_entry(word)
+        senses = entry.get("senses") or []
+        slots = []
+        for i in range(self.MAX_SENSES):
+            sense = self._sense_at(senses, i)
+            examples = sense.get("examples") or []
+            slots.append(
+                {
+                    "pos": sense.get("part_of_speech", "") or "",
+                    "def": sense.get("definition", "") or "",
+                    "ex1": examples[0] if len(examples) > 0 else "",
+                    "ex2": examples[1] if len(examples) > 1 else "",
+                    "ex3": examples[2] if len(examples) > 2 else "",
+                }
+            )
+        self.drafts[word] = {"senses": slots}
+
     def _load_current(self):
         word = self._current_word()
         if not word:
             return
 
-        draft = self.drafts.get(word)
-
         if self.job_kind == "translation":
+            draft = self.drafts.get(word)
             if draft is not None:
                 translation = draft.get("translation", "")
             else:
@@ -2204,44 +2247,15 @@ class EnrichmentModal:
             self.active_field = "translation"
             return
 
-        if draft is not None:
-            self.fields = {
-                "pos": draft.get("pos", ""),
-                "def1": draft.get("def1", ""),
-                "def2": draft.get("def2", ""),
-                "def3": draft.get("def3", ""),
-                "ex1": draft.get("ex1", ""),
-                "ex2": draft.get("ex2", ""),
-                "ex3": draft.get("ex3", ""),
-            }
-            self.active_field = "pos"
-            return
-
-        entry = self._existing_entry(word)
-        senses = entry.get("senses") or []
-
-        first_sense = (
-            senses[0] if len(senses) > 0 and isinstance(senses[0], dict) else {}
-        )
-        second_sense = (
-            senses[1] if len(senses) > 1 and isinstance(senses[1], dict) else {}
-        )
-        third_sense = (
-            senses[2] if len(senses) > 2 and isinstance(senses[2], dict) else {}
-        )
-
-        first_examples = first_sense.get("examples") or []
-        second_examples = second_sense.get("examples") or []
-        third_examples = third_sense.get("examples") or []
-
+        self._seed_meaning_draft(word)
+        self.sense_index = clamp(self.sense_index, 0, self.MAX_SENSES - 1)
+        slot = self.drafts[word]["senses"][self.sense_index]
         self.fields = {
-            "pos": first_sense.get("part_of_speech", "") or "",
-            "def1": first_sense.get("definition", "") or "",
-            "def2": second_sense.get("definition", "") or "",
-            "def3": third_sense.get("definition", "") or "",
-            "ex1": first_examples[0] if len(first_examples) > 0 else "",
-            "ex2": second_examples[0] if len(second_examples) > 0 else "",
-            "ex3": third_examples[0] if len(third_examples) > 0 else "",
+            "pos": slot.get("pos", ""),
+            "def": slot.get("def", ""),
+            "ex1": slot.get("ex1", ""),
+            "ex2": slot.get("ex2", ""),
+            "ex3": slot.get("ex3", ""),
         }
         self.active_field = "pos"
 
@@ -2253,11 +2267,11 @@ class EnrichmentModal:
         if self.job_kind == "translation":
             self.drafts[word] = {"translation": self.fields.get("translation", "")}
         else:
-            self.drafts[word] = {
+            self._seed_meaning_draft(word)
+            slots = self.drafts[word]["senses"]
+            slots[self.sense_index] = {
                 "pos": self.fields.get("pos", ""),
-                "def1": self.fields.get("def1", ""),
-                "def2": self.fields.get("def2", ""),
-                "def3": self.fields.get("def3", ""),
+                "def": self.fields.get("def", ""),
                 "ex1": self.fields.get("ex1", ""),
                 "ex2": self.fields.get("ex2", ""),
                 "ex3": self.fields.get("ex3", ""),
@@ -2297,17 +2311,16 @@ class EnrichmentModal:
                     word, draft.get("translation", ""), self.language
                 )
             else:
-                save_manual_meaning(
-                    word,
-                    draft.get("pos", ""),
-                    [
-                        draft.get("def1", ""),
-                        draft.get("def2", ""),
-                        draft.get("def3", ""),
-                    ],
-                    [draft.get("ex1", ""), draft.get("ex2", ""), draft.get("ex3", "")],
-                    self.language,
-                )
+                slots = draft.get("senses") or []
+                senses_payload = [
+                    (
+                        slot.get("pos", ""),
+                        slot.get("def", ""),
+                        [slot.get("ex1", ""), slot.get("ex2", ""), slot.get("ex3", "")],
+                    )
+                    for slot in slots
+                ]
+                save_manual_meaning(word, senses_payload, self.language)
             self.apply_done += 1
 
         if not self.apply_items:
@@ -2380,7 +2393,7 @@ class EnrichmentModal:
                     if self.job_kind == "translation":
                         self.active_field = "translation"
                     else:
-                        order = ["pos", "def1", "ex1", "def2", "ex2", "def3", "ex3"]
+                        order = ["pos", "def", "ex1", "ex2", "ex3"]
                         idx = (
                             order.index(self.active_field)
                             if self.active_field in order
@@ -2471,6 +2484,7 @@ class EnrichmentModal:
                         if r.collidepoint(event.pos):
                             self._snapshot_current()
                             self.word_index = idx
+                            self.sense_index = 0
                             self._load_current()
                             self.picker_open = False
                             return True
@@ -2478,6 +2492,15 @@ class EnrichmentModal:
                 if self.picker_open:
                     self.picker_open = False
                     return True
+
+                if self.job_kind == "meaning":
+                    for sidx, r in self._rects.get("senses", {}).items():
+                        if r.collidepoint(event.pos):
+                            if sidx != self.sense_index:
+                                self._snapshot_current()
+                                self.sense_index = sidx
+                                self._load_current()
+                            return True
 
                 for key, r in self._rects.get("fields", {}).items():
                     if r.collidepoint(event.pos):
@@ -2564,11 +2587,15 @@ class EnrichmentModal:
 
         self._rects = {
             "fields": {},
+            "senses": {},
             "apply": None,
             "close": None,
             "selector": None,
             "picker": None,
         }
+        self._hover_field_key = None
+
+        HOVER_POPUP_KEYS = {"def", "ex1", "ex2", "ex3"}
 
         field_y = panel.y + 135
         field_h = 30
@@ -2595,22 +2622,62 @@ class EnrichmentModal:
                 tick = FONT_SM.render(special_chars["[OK]"], True, GREEN)
                 surface.blit(tick, tick.get_rect(midright=(r.right - 10, r.centery)))
 
+            if (
+                key in HOVER_POPUP_KEYS
+                and text.strip()
+                and r.collidepoint(mouse_pos)
+            ):
+                self._hover_field_key = key
+
             return r.bottom + 23
 
         if self.job_kind == "translation":
             field_y = field("Translation:", "translation", field_y, field_h)
         else:
+            # 1-10 definition-slot selector buttons
+            word = self._current_word()
+            sel_row_y = field_y
+            btn_gap = 8
+            btn_w = (field_w - btn_gap * (self.MAX_SENSES - 1)) // self.MAX_SENSES
+            btn_h = 30
+            for i in range(self.MAX_SENSES):
+                r = pygame.Rect(
+                    left + i * (btn_w + btn_gap), sel_row_y, btn_w, btn_h
+                )
+                self._rects["senses"][i] = r
+                is_active = i == self.sense_index
+                has_def = self._slot_has_definition(word, i)
+                if has_def:
+                    bg = GREEN if not is_active else GREEN
+                    fg = WHITE
+                    border = GREEN_BDR if not is_active else ACCENT
+                else:
+                    bg = BLUE_BG if is_active else PANEL2
+                    fg = TEXT
+                    border = ACCENT if is_active else BORDER
+                draw_panel(surface, r, bg, border, radius=8)
+                blit_text(
+                    surface,
+                    str(i + 1),
+                    FONT_SM,
+                    fg,
+                    r.centerx,
+                    r.centery,
+                    anchor="center",
+                )
+            field_y = sel_row_y + btn_h + 35
+
             field_y = field(
                 "Part of speech (n-noun, v-verb, a/s-adjective, r-adverb):",
                 "pos",
                 field_y,
                 field_h,
             )
-            field_y = field("Definition 1:", "def1", field_y, field_h)
+            field_y = field(
+                f"Definition {self.sense_index + 1}:", "def", field_y, field_h
+            )
             field_y = field("Example 1:", "ex1", field_y, field_h)
-            field_y = field("Definition 2:", "def2", field_y, field_h)
             field_y = field("Example 2:", "ex2", field_y, field_h)
-            field_y = field("Definition 3:", "def3", field_y, field_h)
             field_y = field("Example 3:", "ex3", field_y, field_h)
 
         bar_rect = pygame.Rect(panel.x + 24, panel.bottom - 65, panel.width - 48, 18)
@@ -2698,13 +2765,96 @@ class EnrichmentModal:
                     anchor="midleft",
                 )
 
-                if self._field_is_dirty(
-                    word, "translation" if self.job_kind == "translation" else "def1"
-                ):
+                word_is_dirty = (
+                    self._field_is_dirty(word, "translation")
+                    if self.job_kind == "translation"
+                    else self._word_has_any_dirty_meaning(word)
+                )
+                if word_is_dirty:
                     tick = FONT_SM.render(special_chars["[OK]"], True, GREEN)
                     surface.blit(
                         tick, tick.get_rect(midright=(r.right - 10, r.centery))
                     )
+
+        # Hover popup: show full content of a definition/example field, the
+        # same way hovering a word in the results panel shows its details.
+        if self._hover_field_key is not None:
+            text = self.fields.get(self._hover_field_key, "")
+            if text.strip():
+                self._draw_field_hover_popup(surface, W, H, mouse_pos, text)
+
+    def _word_has_any_dirty_meaning(self, word):
+        """True if any of the up to 10 sense slots differ from saved JSON,
+        used to show the picker's green tick for meaning jobs."""
+        draft = self.drafts.get(word)
+        if not draft:
+            return False
+        slots = draft.get("senses") or []
+        entry = self._existing_entry(word)
+        saved_senses = entry.get("senses") or []
+        for i, slot in enumerate(slots):
+            saved = self._sense_at(saved_senses, i)
+            saved_examples = saved.get("examples") or []
+            pairs = [
+                (slot.get("pos", ""), saved.get("part_of_speech", "")),
+                (slot.get("def", ""), saved.get("definition", "")),
+                (slot.get("ex1", ""), saved_examples[0] if saved_examples else ""),
+                (
+                    slot.get("ex2", ""),
+                    saved_examples[1] if len(saved_examples) > 1 else "",
+                ),
+                (
+                    slot.get("ex3", ""),
+                    saved_examples[2] if len(saved_examples) > 2 else "",
+                ),
+            ]
+            for current, original in pairs:
+                if str(current).strip() != str(original).strip() and str(
+                    current
+                ).strip():
+                    return True
+        return False
+
+    def _draw_field_hover_popup(self, surface, W, H, mouse_pos, text):
+        """Draw a tooltip box near the mouse with the full field text,
+        wrapped, matching the style of the results-panel word tooltip."""
+        pad = 10
+        max_w = min(420, W - 2 * PAD)
+        lines = self._wrap_text(text, FONT_SM, max_w - 2 * pad)
+
+        line_h = FONT_SM.get_height() + 3
+        tip_w = max_w
+        tip_h = pad * 2 + line_h * len(lines)
+
+        tip_rect = pygame.Rect(mouse_pos[0] + 20, mouse_pos[1] + 10, tip_w, tip_h)
+        if tip_rect.right > W - PAD:
+            tip_rect.right = W - PAD
+        if tip_rect.bottom > H - PAD:
+            tip_rect.bottom = H - PAD
+
+        pygame.draw.rect(surface, PANEL, tip_rect, border_radius=10)
+        pygame.draw.rect(surface, ACCENT, tip_rect, 2, border_radius=10)
+
+        ly = tip_rect.y + pad
+        for line in lines:
+            blit_text(surface, line, FONT_SM, TEXT, tip_rect.x + pad, ly)
+            ly += line_h
+
+    @staticmethod
+    def _wrap_text(text, font, max_w):
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            test = (current + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2723,9 +2873,8 @@ def build_enrichment_entry(job_kind, language, word, existing):
 
     if language == "english":
         if job_kind == "translation":
-            greek_translation = entry.get("greek_translation")
-            if not greek_translation:
-                greek_translation = get_greek_translation(word)
+            # Always fetch a fresh translation, even if a manual one exists.
+            greek_translation = get_greek_translation(word)
 
             senses = entry.get("senses")
             if not isinstance(senses, list):
@@ -2736,9 +2885,8 @@ def build_enrichment_entry(job_kind, language, word, existing):
             entry["status"] = build_status(word, greek_translation, senses)
             return entry
 
-        senses = entry.get("senses")
-        if not isinstance(senses, list) or not senses:
-            senses = get_wordnet_senses(word)
+        # Always fetch fresh WordNet senses, even if manual senses exist.
+        senses = get_wordnet_senses(word)
 
         greek_translation = entry.get("greek_translation")
         entry["greek_translation"] = greek_translation
@@ -2747,9 +2895,8 @@ def build_enrichment_entry(job_kind, language, word, existing):
         return entry
 
     if job_kind == "translation":
-        english_translation = entry.get("english_translation")
-        if not english_translation:
-            english_translation = get_english_translation(word)
+        # Always fetch a fresh translation, even if a manual one exists.
+        english_translation = get_english_translation(word)
 
         senses = entry.get("senses")
         if not isinstance(senses, list):
@@ -2761,10 +2908,9 @@ def build_enrichment_entry(job_kind, language, word, existing):
         return entry
 
     english_translation = entry.get("english_translation")
-    senses = entry.get("senses")
-    if (not isinstance(senses, list) or not senses) and english_translation:
+    if english_translation:
         senses = get_wordnet_senses(english_translation)
-    elif not isinstance(senses, list):
+    else:
         senses = []
 
     entry["english_translation"] = english_translation
@@ -3527,7 +3673,14 @@ def save_manual_translation(word, translation, language):
     return entry
 
 
-def save_manual_meaning(word, pos, definitions, examples, language):
+def save_manual_meaning(word, senses_input, language):
+    """
+    senses_input: list of up to MAX_SENSES (10) tuples
+        (part_of_speech, definition, examples)
+    where examples is a list of up to 3 example strings. Slots with a blank
+    definition are dropped entirely (so leaving later slots empty doesn't
+    save empty senses).
+    """
     path = (
         state.english_meanings_file
         if language == "english"
@@ -3537,24 +3690,18 @@ def save_manual_meaning(word, pos, definitions, examples, language):
     key = normalize_word(word)
     existing = data.get(key, {})
 
-    pos = (pos or "").strip()
-    if isinstance(definitions, str):
-        definitions = [definitions]
-
-    cleaned_definitions = [str(d).strip() for d in definitions if str(d).strip()][:3]
-    cleaned_examples = [str(ex).strip() for ex in examples if str(ex).strip()][:3]
-
     senses = []
-    for i, definition in enumerate(cleaned_definitions):
-        sense_examples = []
-        if i < len(cleaned_examples):
-            sense_examples = [cleaned_examples[i]]
-
+    for pos, definition, examples in senses_input:
+        definition = str(definition or "").strip()
+        if not definition:
+            continue
+        pos = str(pos or "").strip()
+        cleaned_examples = [str(ex).strip() for ex in (examples or []) if str(ex).strip()][:3]
         senses.append(
             {
                 "part_of_speech": pos,
                 "definition": definition,
-                "examples": sense_examples,
+                "examples": cleaned_examples,
             }
         )
 
