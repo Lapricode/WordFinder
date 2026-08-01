@@ -4,7 +4,9 @@ Word Finder is a desktop word-filtering app for solving word games and experimen
 
 | | |
 |:-:|:-:|
-| ![Greek](images/greek_words_pattern_hunt_example.png) | ![English](images/english_words_letter_match_example.png) |
+| ![greek_pattern_hunt](images/greek_pattern_hunt_example.png) | ![english_letter_match](images/english_letter_match_example.png) |
+| ![greek_getting_meanings](images/greek_getting_meanings_example.png) | ![english_setting_meanings](images/english_setting_meanings_example.png) |
+| ![english_getting_translations](images/english_setting_translations_example.png) | ![english_searching](images/english_searching_example.png) |
 
 ## Features
 
