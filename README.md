@@ -2,11 +2,32 @@
 
 Word Finder is a desktop word-filtering app for solving word games and experimenting with custom dictionary lists. It includes two search modes, supports **Greek** and **English** word lists, and can save filtered results to a text file. It also includes built-in translation and meaning enrichment tools for the current search results.
 
-| | |
-|:-:|:-:|
-| ![greek_pattern_hunt](images/greek_pattern_hunt_example.png) | ![english_letter_match](images/english_letter_match_example.png) |
-| ![greek_getting_meanings](images/greek_getting_meanings_example.png) | ![english_setting_meanings](images/english_setting_meanings_example.png) |
-| ![english_getting_translations](images/english_getting_translations_example.png) | ![english_searching](images/english_searching_example.png) |
+<table>
+  <tr>
+    <td align="center">
+      <img src="images/greek_pattern_hunt_example.png" alt="greek_pattern_hunt">
+    </td>
+    <td align="center">
+      <img src="images/english_letter_match_example.png" alt="english_letter_match">
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="images/greek_getting_meanings_example.png" alt="greek_getting_meanings">
+    </td>
+    <td align="center">
+      <img src="images/english_setting_meanings_example.png" alt="english_setting_meanings">
+    </td>
+  </tr>
+  <tr>
+    <td align="center">
+      <img src="images/english_getting_translations_example.png" alt="english_getting_translations">
+    </td>
+    <td align="center">
+      <img src="images/english_searching_example.png" alt="english_searching">
+    </td>
+  </tr>
+</table>
 
 ## Features
 
