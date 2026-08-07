@@ -1,6 +1,9 @@
 import os
 import sys
 import json
+import math
+import unicodedata
+from statistics import mean, median, pstdev
 import threading
 import queue
 import pygame
@@ -31,28 +34,28 @@ except Exception:
 GREEK_LETTERS = [
     "αάΑΆ",
     "βΒ",
-    "ψΨ",
+    "γΓ",
     "δΔ",
     "εέΕΈ",
-    "φΦ",
-    "γΓ",
+    "ζΖ",
     "ηήΗΉ",
+    "θΘ",
     "ιίΙΊϊΐ",
-    "ξΞ",
     "κΚ",
     "λΛ",
     "μΜ",
     "νΝ",
+    "ξΞ",
     "οόΟΌ",
     "πΠ",
     "ρΡ",
     "σΣς",
     "τΤ",
-    "θΘ",
-    "ωΩώΏ",
-    "χΧ",
     "υύΥΎϋΰ",
-    "ζΖ",
+    "φΦ",
+    "χΧ",
+    "ψΨ",
+    "ωΩώΏ",
 ]
 
 GREEK_GROUPS = [tuple(group) for group in GREEK_LETTERS]
@@ -73,12 +76,12 @@ for g in ENGLISH_GROUPS:
     for ch in g:
         ENGLISH_CHAR_TO_FIRST[ch] = g[0]
 
-INPUT_MODES_LM = ["valid", "invalid", "exist"]
-INPUT_MODES_PH = ["start", "middle", "end"]
+INPUT_MODES_LM = ["valid", "invalid", "exist", "absent"]
+INPUT_MODES_PH = ["start", "inner", "middle", "end"]
 
 FINDER_MODES = ["letter_match", "pattern_hunt"]
-PH_ROWS = ["start", "middle", "end"]
-PH_COLS = ["valid", "invalid", "exist"]
+PH_ROWS = ["start", "inner", "middle", "end"]
+PH_COLS = ["valid", "invalid", "exist", "absent"]
 
 
 def match_key(ch: str) -> str:
@@ -237,6 +240,47 @@ def _pat_matches_middle(word, pat_info, language):
     return False
 
 
+def _pat_matches_inner(word, pat_info, language):
+    seq = pat_info["seq"]
+    expanded = pat_info["expanded"]
+
+    if not seq:
+        return True
+
+    # Strictly inside: there must be at least one character before and after
+    if len(word) < len(seq) + 2:
+        return False
+
+    interior = word[1:-1]
+    if not interior:
+        return False
+
+    if expanded:
+        # reuse the same sequence-matching logic, but only inside the word
+        for start in range(0, len(interior) - len(seq) + 1):
+            candidate = interior[start : start + len(seq)]
+            ok = True
+            for ci, ch_pat in enumerate(seq):
+                wch = candidate[ci]
+                if language == "greek":
+                    if GREEK_CHAR_TO_FIRST.get(ch_pat) != GREEK_CHAR_TO_FIRST.get(wch):
+                        ok = False
+                        break
+                elif language == "english":
+                    if ch_pat.lower() != wch.lower():
+                        ok = False
+                        break
+                else:
+                    if ch_pat != wch:
+                        ok = False
+                        break
+            if ok:
+                return True
+        return False
+
+    return seq in interior
+
+
 def expand_sequence(seq, language):
     """Convert a sequence like 'οσαστ' into 'οόΟΌσΣςαάΑΆσΣςτΤ'.
     Each character position is expanded to its full variant group independently,
@@ -384,11 +428,37 @@ def _check_end_exist(word, exist_pats):
     return any(word.endswith(v) for v in _exist_variants(longest_pat))
 
 
+def _check_inner_exist(word, exist_pats):
+    if not exist_pats:
+        return True
+    
+    interior = word
+    if not interior:
+        return False
+
+    requirements = Counter()
+
+    for pat in exist_pats:
+        variants = tuple(sorted(_exist_variants(pat)))
+        if variants:
+            requirements[variants] += 1
+
+    for variants, needed_count in requirements.items():
+        found = 0
+        for variant in variants:
+            found += interior.count(variant)
+
+        if found < needed_count:
+            return False
+
+    return True
+
+
 def _check_middle_exist(word, exist_pats):
     if not exist_pats:
         return True
 
-    interior = word
+    interior = word[1 : -1]
     if not interior:
         return False
 
@@ -422,12 +492,14 @@ def find_pattern_words_grid(
                   patterns must contain the exist sequence(s) literally
     """
     results = []
-    rows = ["start", "middle", "end"]
-    cols = ["valid", "invalid", "exist"]
+    rows = ["start", "inner", "middle", "end"]
+    cols = ["valid", "invalid", "exist", "absent"]
 
     def row_match(word, pat_info, row_name):
         if row_name == "start":
             return _pat_matches_start(word, pat_info, language)
+        if row_name == "inner":
+            return _pat_matches_inner(word, pat_info, language)
         if row_name == "middle":
             return _pat_matches_middle(word, pat_info, language)
         return _pat_matches_end(word, pat_info, language)
@@ -454,10 +526,20 @@ def find_pattern_words_grid(
                 for p in slots_by_cell[row]["exist"][: counts_by_cell[row]["exist"]]
                 if p["seq"]
             ]
+            absent_pats = [
+                p
+                for p in slots_by_cell[row]["absent"][: counts_by_cell[row]["absent"]]
+                if p["seq"]
+            ]
 
             # EXIST constraints
             if row == "start":
                 if not _check_start_exist(word, exist_pats):
+                    ok = False
+                    break
+
+            elif row == "middle":
+                if not _check_inner_exist(word, exist_pats):
                     ok = False
                     break
 
@@ -500,6 +582,255 @@ def exist_key_for_input(letter: str, language: str):
     return letter
 
 
+def add_absent_letter(letter: str):
+    key = exist_key_for_input(letter, state.language)
+    if key is None:
+        return
+    if key in state.absent_letters:
+        state.absent_letters.remove(key)
+        state.selected_absent_idx = clamp(
+            state.selected_absent_idx, 0, max(len(state.absent_letters) - 1, 0)
+        )
+    else:
+        state.absent_letters.append(key)
+
+
+def delete_absent_item_at(idx):
+    if 0 <= idx < len(state.absent_letters):
+        del state.absent_letters[idx]
+        state.selected_absent_idx = clamp(
+            state.selected_absent_idx, 0, max(len(state.absent_letters) - 1, 0)
+        )
+
+
+def handle_text_input(ch: str):
+    if not ch or not ch.isalpha():
+        return
+    if state.finder_mode == "letter_match":
+        if state.input_mode in ("valid", "invalid"):
+            toggle_letter(ch)
+        elif state.input_mode == "exist":
+            add_exist_letter(ch)
+        elif state.input_mode == "absent":
+            add_absent_letter(ch)
+    else:
+        ph_add_letter(ch)
+
+
+def handle_backspace_input():
+    if state.finder_mode == "letter_match":
+        if state.input_mode == "exist":
+            delete_exist_item_at(state.selected_exist_idx)
+        elif state.input_mode == "absent":
+            delete_absent_item_at(state.selected_absent_idx)
+        else:
+            for p in target_positions():
+                if 0 <= p < state.word_length:
+                    if state.input_mode == "valid":
+                        state.valid_sets[p].clear()
+                    else:
+                        state.invalid_sets[p].clear()
+    else:
+        ph_backspace()
+
+
+def greek_tone_variant(ch: str, tone_state: int):
+    """
+    tone_state:
+      0 = plain
+      1 = tonos
+      2 = diaeresis
+      3 = tonos + diaeresis
+    """
+    if not ch or tone_state == 0:
+        return ch
+
+    base = unicodedata.normalize("NFD", ch)
+
+    # tonos for any Greek vowel
+    if tone_state == 1:
+        return unicodedata.normalize("NFC", base + "\u0301")
+
+    # diaeresis / both: iota and upsilon only
+    if ch.lower() in {"ι", "υ"}:
+        if tone_state == 2:
+            return unicodedata.normalize("NFC", base + "\u0308")
+        if tone_state == 3:
+            return unicodedata.normalize("NFC", base + "\u0301\u0308")
+
+    return unicodedata.normalize("NFC", base + "\u0301")
+
+
+def keyboard_char_for(base: str):
+    if state.language == "english":
+        return base.upper() if state.keyboard_shift else base.lower()
+
+    ch = base.upper() if state.keyboard_shift else base.lower()
+    return greek_tone_variant(ch, state.keyboard_tone)
+
+
+def _keyboard_rows():
+    if state.language == "english":
+        return [
+            list("qwertyuiop"),
+            list("asdfghjkl"),
+            list("zxcvbnm"),
+        ]
+    return [
+        ["ς", "ε", "ρ", "τ", "υ", "θ", "ι", "ο", "π"],
+        ["α", "σ", "δ", "φ", "γ", "η", "ξ", "κ", "λ"],
+        ["ζ", "χ", "ψ", "ω", "β", "ν", "μ"],
+    ]
+
+
+def draw_virtual_keyboard(surface, panel, mouse_pos):
+    kb_h = 120
+    kb_rect = pygame.Rect(
+        panel.x + PAD,
+        panel.bottom - kb_h - 28,
+        panel.width - 2 * PAD,
+        kb_h,
+    )
+    draw_panel(surface, kb_rect, PANEL2, BORDER, radius=14)
+
+    blit_text(
+        surface,
+        "Virtual Keyboard",
+        FONT_SM,
+        MUTED,
+        kb_rect.centerx,
+        kb_rect.y + 6,
+        anchor="midtop",
+    )
+
+    controls = {}
+    key_rects = []
+
+    rows = _keyboard_rows()
+
+    # Letter rows start higher than before
+    row_top_1 = kb_rect.y + 28
+    row_h = 22
+    row_gap = 5
+    key_gap = 5
+
+    # Row 1
+    row1 = rows[0]
+    row1_letter_w = max(24, (kb_rect.width - 16 - 2 * key_gap - 82) // len(row1))
+    start_x1 = kb_rect.x + 8
+    for i, base in enumerate(row1):
+        r = pygame.Rect(start_x1 + i * (row1_letter_w + key_gap), row_top_1, row1_letter_w, row_h)
+        key_rects.append((base, r))
+        draw_button(
+            surface, r, keyboard_char_for(base),
+            bg=BLUE_BG, fg=TEXT, radius=7,
+            hovered=r.collidepoint(mouse_pos), font=FONT_SM
+        )
+
+    # Backspace at the right of row 1, after π / p
+    back_rect = pygame.Rect(kb_rect.right - 82, row_top_1, 74, row_h)
+    controls["backspace"] = back_rect
+    draw_button(
+        surface, back_rect, "Backspace",
+        bg=RED, fg=WHITE, radius=7,
+        hovered=back_rect.collidepoint(mouse_pos), font=FONT_SM
+    )
+
+    # Row 2
+    row2_y = row_top_1 + row_h + row_gap
+    row2 = rows[1]
+
+    shift_rect = pygame.Rect(kb_rect.x + 8, row2_y, 74, row_h)
+    controls["shift"] = shift_rect
+    draw_button(
+        surface, shift_rect,
+        "Shift on" if state.keyboard_shift else "Shift off",
+        bg=ORANGE if state.keyboard_shift else BROWN,
+        fg=WHITE, radius=7,
+        hovered=shift_rect.collidepoint(mouse_pos), font=FONT_SM
+    )
+
+    row2_letter_w = max(24, (kb_rect.width - 16 - 74 - 82 - 2 * key_gap) // len(row2))
+    row2_start_x = shift_rect.right + key_gap
+    for i, base in enumerate(row2):
+        r = pygame.Rect(row2_start_x + i * (row2_letter_w + key_gap), row2_y, row2_letter_w, row_h)
+        key_rects.append((base, r))
+        draw_button(
+            surface, r, keyboard_char_for(base),
+            bg=BLUE_BG, fg=TEXT, radius=7,
+            hovered=r.collidepoint(mouse_pos), font=FONT_SM
+        )
+
+    tone_labels = ["Tone off", "Tonos", "Diaeresis", "Both"]
+    tone_rect = pygame.Rect(kb_rect.right - 74, row2_y, 74, row_h)
+    controls["tone"] = tone_rect
+    draw_button(
+        surface, tone_rect, tone_labels[state.keyboard_tone],
+        bg=PURPLE if state.keyboard_tone else DARK,
+        fg=WHITE, radius=7,
+        hovered=tone_rect.collidepoint(mouse_pos), font=FONT_SM
+    )
+
+    # Row 3
+    row3_y = row2_y + row_h + row_gap
+    row3 = rows[2]
+
+    row3_letter_area_w = kb_rect.width - 16
+    letter_w3 = max(24, (row3_letter_area_w - 2 * key_gap - 220) // len(row3))
+    total_letters_w = len(row3) * letter_w3 + (len(row3) - 1) * key_gap
+
+    # Put Greek/English as a large centered "space button"
+    lang_btn_w = 186
+    lang_rect = pygame.Rect(
+        kb_rect.centerx - lang_btn_w // 2,
+        row3_y,
+        lang_btn_w,
+        row_h,
+    )
+    controls["lang"] = lang_rect
+    draw_button(
+        surface,
+        lang_rect,
+        "Greek" if state.language == "greek" else "English",
+        bg=CYAN,
+        fg=WHITE,
+        radius=10,
+        hovered=lang_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+
+    left_letters_w = max(0, (lang_rect.left - (kb_rect.x + 8) - key_gap))
+    right_letters_x = lang_rect.right + key_gap
+
+    # Left-side letters
+    left_keys = row3[: max(0, len(row3) // 2)]
+    right_keys = row3[max(0, len(row3) // 2):]
+
+    # Draw left-side letters evenly
+    if left_keys:
+        left_w = max(24, (left_letters_w - (len(left_keys) - 1) * key_gap) // len(left_keys))
+        lx = kb_rect.x + 8
+        for i, base in enumerate(left_keys):
+            r = pygame.Rect(lx + i * (left_w + key_gap), row3_y, left_w, row_h)
+            key_rects.append((base, r))
+            draw_button(surface, r, keyboard_char_for(base), bg=BLUE_BG, fg=TEXT, radius=7, hovered=r.collidepoint(mouse_pos), font=FONT_SM)
+
+    # Draw right-side letters
+    if right_keys:
+        right_area_w = (kb_rect.right - 8) - right_letters_x
+        right_w = max(24, (right_area_w - (len(right_keys) - 1) * key_gap) // len(right_keys))
+        rx = right_letters_x
+        for i, base in enumerate(right_keys):
+            r = pygame.Rect(rx + i * (right_w + key_gap), row3_y, right_w, row_h)
+            key_rects.append((base, r))
+            draw_button(surface, r, keyboard_char_for(base), bg=BLUE_BG, fg=TEXT, radius=7, hovered=r.collidepoint(mouse_pos), font=FONT_SM)
+
+    _results_keyboard_rects["panel"] = kb_rect
+    _results_keyboard_rects["keys"] = key_rects
+    _results_keyboard_rects["controls"] = controls
+    return kb_rect.top
+
+
 def resource_path(relative_path):
     try:
         base_path = sys._MEIPASS
@@ -517,6 +848,8 @@ _NLTK_READY = False
 _TRANSLATOR_CACHE = {}
 _meanings_cache = {}  # path -> {"mtime": float, "data": dict}
 _results_legend_rects = {"toggle": None, "items": {}}
+_results_action_rects = {"show_words": None, "show_stats": None, "keyboard": None}
+_results_keyboard_rects = {"panel": None, "keys": [], "controls": {}}
 ENRICHMENT_SAVE_EVERY_WORDS = 10  # 1 = save every word, higher = faster
 
 
@@ -860,7 +1193,9 @@ WHITE = (255, 255, 255)
 BROWN = (150, 102, 54)
 BROWN_BG = (248, 239, 230)
 BROWN_BDR = (209, 181, 154)
-ORANGE = (255, 165, 0)
+ORANGE = (214, 120, 20)
+ORANGE_BG = (255, 236, 205)
+ORANGE_BDR = (232, 156, 64)
 TEAL = (0, 160, 140)
 TEAL_BG = (220, 248, 244)
 TEAL_BDR = (100, 200, 180)
@@ -894,7 +1229,9 @@ LIGHT_THEME = {
     "BROWN": (150, 102, 54),
     "BROWN_BG": (248, 239, 230),
     "BROWN_BDR": (209, 181, 154),
-    "ORANGE": (255, 165, 0),
+    "ORANGE": (214, 120, 20),
+    "ORANGE_BG": (255, 236, 205),
+    "ORANGE_BDR": (232, 156, 64),
     "TEAL": (0, 160, 140),
     "TEAL_BG": (220, 248, 244),
     "TEAL_BDR": (100, 200, 180),
@@ -929,7 +1266,9 @@ DARK_THEME = {
     "BROWN": (204, 150, 96),
     "BROWN_BG": (52, 40, 30),
     "BROWN_BDR": (120, 90, 64),
-    "ORANGE": (255, 177, 66),
+    "ORANGE": (255, 175, 70),
+    "ORANGE_BG": (78, 56, 22),
+    "ORANGE_BDR": (184, 128, 52),
     "TEAL": (0, 200, 180),
     "TEAL_BG": (20, 50, 46),
     "TEAL_BDR": (60, 140, 120),
@@ -1129,7 +1468,7 @@ def short_path(p, n=20):
 def set_theme(mode: str):
     global BG, SLOT, PANEL, PANEL2, BORDER, TEXT, MUTED, ACCENT
     global BLUE_BG, GREEN, GREEN_BG, GREEN_BDR, RED, RED_BG, RED_BDR
-    global CYAN, DARK, WHITE, BROWN, BROWN_BG, BROWN_BDR, ORANGE
+    global CYAN, DARK, WHITE, BROWN, BROWN_BG, BROWN_BDR, ORANGE, ORANGE_BG, ORANGE_BDR
     global TEAL, TEAL_BG, TEAL_BDR, PINK, PINK_BG, PINK_BDR, PURPLE, PURPLE_BG, PURPLE_BDR
     global STATUS_BG, STATUS_BDR
 
@@ -1157,6 +1496,8 @@ def set_theme(mode: str):
     BROWN_BG = theme["BROWN_BG"]
     BROWN_BDR = theme["BROWN_BDR"]
     ORANGE = theme["ORANGE"]
+    ORANGE_BG = theme["ORANGE_BG"]
+    ORANGE_BDR = theme["ORANGE_BDR"]
     TEAL = theme["TEAL"]
     TEAL_BG = theme["TEAL_BG"]
     TEAL_BDR = theme["TEAL_BDR"]
@@ -1228,22 +1569,13 @@ class InfoModal:
         ("Letter Match", "heading"),
         ("Filters words by applying per-slot letter rules.", "body"),
         (
-            f"Three input modes (cycle with {special_chars["^"]} {special_chars["v"]} or click the pill toggle):",
+            f"Four input modes (cycle with {special_chars['^']} {special_chars['v']} or click the pill toggle):",
             "body",
         ),
-        (
-            f"Valid {special_chars["-"]} the selected letter group must appear in that slot.",
-            "bullet",
-        ),
-        (
-            f"Invalid {special_chars["-"]} the selected letter group must not appear in that slot.",
-            "bullet",
-        ),
-        (
-            f"Exist {special_chars["-"]} the letter must appear somewhere in the word. Repeating a letter in "
-            "Exist means it must occur multiple times.",
-            "bullet",
-        ),
+        (f"Valid {special_chars['-']} the selected letter group must appear in that slot.", "bullet"),
+        (f"Invalid {special_chars['-']} the selected letter group must not appear in that slot.", "bullet"),
+        (f"Exist {special_chars['-']} the letter must appear somewhere in the word. Repeating a letter in Exist means it must occur multiple times.", "bullet"),
+        (f"Absent {special_chars['-']} the letter must not appear anywhere in the word. Each letter can appear at most once in the Absent area.", "bullet"),
         ("", "gap"),
         ("Navigation:", "body"),
         (
@@ -1274,10 +1606,19 @@ class InfoModal:
         ("", "gap"),
         ("Pattern Hunt", "heading"),
         (
-            "Filters words by a 3x3 grid: rows are Start / Middle / End and columns are "
-            "Valid / Invalid / Exist.",
+            "Filters words by a 4x4 grid: rows are Start / Middle / Inner / End and columns are Valid / Invalid / Exist / Absent.",
             "body",
         ),
+        ("Pattern matching rows:", "body"),
+        (f"Start {special_chars['-']} sequence must match the beginning of the word.", "bullet"),
+        (f"Inner {special_chars['-']} sequence may appear anywhere in the word.", "bullet"),
+        (f"Middle {special_chars['-']} sequence must appear strictly inside the word.", "bullet"),
+        (f"End {special_chars['-']} sequence must match the end of the word.", "bullet"),
+        ("Cell behavior:", "body"),
+        (f"Valid {special_chars['-']} at least one pattern in the cell must match.", "bullet"),
+        (f"Invalid {special_chars['-']} no pattern in the cell may match.", "bullet"),
+        (f"Exist {special_chars['-']} every pattern in the cell must appear in the word.", "bullet"),
+        (f"Absent {special_chars['-']} every pattern in the cell must be absent from the word.", "bullet"),
         ("", "gap"),
         ("Navigation:", "body"),
         (
@@ -1296,34 +1637,6 @@ class InfoModal:
         (
             "Backspace deletes the current slot content; if the slot becomes empty, its "
             "expand flag is also cleared.",
-            "bullet",
-        ),
-        ("", "gap"),
-        ("Cell behavior:", "body"),
-        (
-            f"Valid {special_chars["-"]} at least one pattern in the cell must match.",
-            "bullet",
-        ),
-        (
-            f"Invalid {special_chars["-"]} no pattern in the cell may match.",
-            "bullet",
-        ),
-        (
-            f"Exist {special_chars["-"]} every pattern in the cell must appear in the word.",
-            "bullet",
-        ),
-        ("", "gap"),
-        ("Pattern matching rows:", "body"),
-        (
-            f"Start {special_chars["-"]} sequence must match the beginning of the word.",
-            "bullet",
-        ),
-        (
-            f"Middle {special_chars["-"]} sequence must appear strictly in the word's interior.",
-            "bullet",
-        ),
-        (
-            f"End {special_chars["-"]} sequence must match the end of the word.",
             "bullet",
         ),
         ("", "gap"),
@@ -1383,6 +1696,10 @@ class InfoModal:
         (f"Ctrl + / {special_chars['-']} increase/decrease max preview.", "bullet"),
         (
             f"+ / {special_chars['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
+            "bullet",
+        ),
+        (
+            f"Virtual keyboard button {special_chars['-']} shows or hides the keyboard in the results panel. Use Shift, Tone, Backspace, and Greek/English to switch input behavior.",
             "bullet",
         ),
         ("", "gap"),
@@ -2857,6 +3174,826 @@ class EnrichmentModal:
         return lines or [""]
 
 
+class ShowWordsModal:
+    def __init__(self):
+        self.visible = False
+        self.words = []
+        self.language = "greek"
+        self.letter_filter = "All"
+        self.length_filter = "All"
+        self._scroll = 0
+        self._dragging_sb = False
+        self._drag_offset = 0
+        self._max_scroll_cache = 0
+        self._picker_kind = None   # "letter" | "length" | None
+        self._picker_open = False
+        self._picker_scroll = 0
+        self._rects = {}
+        self._picker_dragging = False
+        self._picker_drag_offset = 0
+
+    def show(self, words, language):
+        self.visible = True
+        self.words = list(words or [])
+        self.language = language
+        self.letter_filter = "All"
+        self.length_filter = "All"
+        self._scroll = 0
+        self._picker_kind = None
+        self._picker_open = False
+        self._picker_scroll = 0
+
+    def hide(self):
+        self.visible = False
+        self._picker_open = False
+        self._picker_kind = None
+
+    def _panel_rect(self, W, H):
+        pw = min(780, W - 80)
+        ph = min(640, H - 60)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _filtered_words(self):
+        out = []
+        for w in self.words:
+            if self.length_filter != "All" and len(w) != self.length_filter:
+                continue
+            if self.letter_filter != "All":
+                first = _base_letter(w[:1], self.language)
+                if first != self.letter_filter:
+                    continue
+            out.append(w)
+        return out
+
+    def _options(self):
+        letters = ["All"] + _display_alphabet(self.language)
+        lengths = ["All"] + list(range(1, MAX_WORD_LENGTH + 1))
+        return letters, lengths
+
+    def _picker_scrollbar_rects(self, picker, total_items, visible, row_h=28, gap=4):
+        content_h = total_items * (row_h + gap) - gap + 16
+        visible_h = picker.height - 16
+        if content_h <= visible_h:
+            return None, None
+
+        track = pygame.Rect(picker.right - 14, picker.y + 8, 6, picker.height - 16)
+        ratio = visible_h / content_h
+        thumb_h = max(20, int(track.height * ratio))
+        max_scroll = max(0, total_items - visible)
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * self._picker_scroll / max(1, max_scroll)
+        )
+        return track, pygame.Rect(track.x, thumb_y, 6, thumb_h)
+
+    def _content_height(self, panel):
+        list_top = panel.y + 128
+        list_bottom = panel.bottom - 54
+        return max(0, len(self._filtered_words()) * 28 - (list_bottom - list_top))
+
+    @property
+    def _max_scroll(self):
+        return getattr(self, "_max_scroll_cache", 0)
+
+    def _scrollbar_rects(self, panel):
+        visible_h = panel.height - 182
+        total_h = len(self._filtered_words()) * 28
+        self._max_scroll_cache = max(0, total_h - visible_h)
+        if total_h <= visible_h:
+            return None, None
+        track = pygame.Rect(panel.right - 16, panel.y + 114, 6, panel.height - 170)
+        ratio = visible_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * self._scroll / max(1, self._max_scroll_cache)
+        )
+        return track, pygame.Rect(track.x, thumb_y, 6, thumb_h)
+
+    def _picker_rects(self, selector_rect, options):
+        picker = pygame.Rect(selector_rect.x, selector_rect.bottom + 6, selector_rect.w, 220)
+        row_h = 28
+        gap = 4
+        visible = max(1, (picker.height - 16) // (row_h + gap))
+        start = clamp(self._picker_scroll, 0, max(0, len(options) - visible))
+        rects = []
+        for i, opt in enumerate(options[start : start + visible], start=start):
+            r = pygame.Rect(
+                picker.x + 10,
+                picker.y + 8 + (i - start) * (row_h + gap),
+                picker.width - 20,
+                row_h,
+            )
+            rects.append((i, opt, r))
+        return picker, rects
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
+
+        panel = self._panel_rect(W, H)
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return True
+
+        track, thumb = self._scrollbar_rects(panel)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if thumb and thumb.collidepoint(event.pos):
+                self._dragging_sb = True
+                self._drag_offset = event.pos[1] - thumb.y
+                return True
+
+            if not panel.collidepoint(event.pos):
+                self.hide()
+                return True
+
+            letter_selector = self._rects.get("letter_selector")
+            length_selector = self._rects.get("length_selector")
+
+            if self._picker_open:
+                picker = self._rects.get("picker")
+                if picker:
+                    options = self._rects.get("picker_options", [])
+                    visible = max(1, (picker.height - 16) // (28 + 4))
+                    track, thumb = self._picker_scrollbar_rects(
+                        picker, len(options), visible
+                    )
+
+                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                        if thumb and thumb.collidepoint(event.pos):
+                            self._picker_dragging = True
+                            self._picker_drag_offset = event.pos[1] - thumb.y
+                            return True
+
+                        if picker.collidepoint(event.pos):
+                            for idx, opt, r in options:
+                                if r.collidepoint(event.pos):
+                                    if self._picker_kind == "letter":
+                                        self.letter_filter = opt
+                                    else:
+                                        self.length_filter = opt
+                                    self._scroll = 0
+                                    self._picker_open = False
+                                    self._picker_kind = None
+                                    return True
+
+                    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+                        self._picker_dragging = False
+
+                    if event.type == pygame.MOUSEMOTION and self._picker_dragging and track:
+                        max_scroll = max(0, len(options) - visible)
+                        new_y = event.pos[1] - self._picker_drag_offset
+                        max_thumb_y = track.y + track.height - thumb.height
+                        ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+                        self._picker_scroll = clamp(
+                            int(round(ratio * max_scroll)), 0, max_scroll
+                        )
+
+                    if event.type == pygame.MOUSEWHEEL and picker.collidepoint(
+                        pygame.mouse.get_pos()
+                    ):
+                        self._picker_scroll = clamp(
+                            self._picker_scroll - event.y,
+                            0,
+                            max(0, len(options) - visible),
+                        )
+                        return True
+            
+            if letter_selector and letter_selector.collidepoint(event.pos):
+                self._picker_kind = "letter"
+                self._picker_open = True
+                self._picker_scroll = 0
+                return True
+            if length_selector and length_selector.collidepoint(event.pos):
+                self._picker_kind = "length"
+                self._picker_open = True
+                self._picker_scroll = 0
+                return True
+
+            close_btn = self._rects.get("close")
+            if close_btn and close_btn.collidepoint(event.pos):
+                self.hide()
+                return True
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_sb and track:
+            new_y = event.pos[1] - self._drag_offset
+            max_thumb_y = track.y + track.height - thumb.height
+            ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+            self._scroll = max(0, min(self._max_scroll, ratio * self._max_scroll))
+
+        if event.type == pygame.MOUSEWHEEL:
+            if self._picker_open:
+                picker = self._rects.get("picker")
+                if picker and picker.collidepoint(pygame.mouse.get_pos()):
+                    options = self._rects.get("picker_options", [])
+                    visible = max(1, (picker.height - 16) // (28 + 4))
+                    self._picker_scroll = clamp(
+                        self._picker_scroll - event.y,
+                        0,
+                        max(0, len(options) - visible),
+                    )
+                    return True
+
+            if panel.collidepoint(pygame.mouse.get_pos()):
+                self._scroll = clamp(self._scroll - event.y * 20, 0, self._max_scroll)
+                return True
+
+        return True
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, BORDER, radius=16)
+
+        blit_text(surface, "Show Words", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+        blit_text(
+            surface,
+            f"{len(self._filtered_words())} word(s)",
+            FONT_SM,
+            MUTED,
+            panel.x + 24,
+            panel.y + 50,
+        )
+
+        letters, lengths = self._options()
+
+        letter_selector = pygame.Rect(panel.x + 24, panel.y + 82, 150, 30)
+        length_selector = pygame.Rect(letter_selector.right + 10, panel.y + 82, 150, 30)
+        self._rects["letter_selector"] = letter_selector
+        self._rects["length_selector"] = length_selector
+
+        draw_button(
+            surface, letter_selector, f"Start: {self.letter_filter}",
+            bg=BLUE_BG, fg=TEXT, hovered=letter_selector.collidepoint(mouse_pos), font=FONT_SM
+        )
+        draw_button(
+            surface, length_selector, f"Length: {self.length_filter}",
+            bg=BLUE_BG, fg=TEXT, hovered=length_selector.collidepoint(mouse_pos), font=FONT_SM
+        )
+
+        list_top = panel.y + 128
+        list_bottom = panel.bottom - 54
+        visible_words = self._filtered_words()
+        line_h = 28
+        start = clamp(self._scroll, 0, max(0, len(visible_words) * line_h - (list_bottom - list_top)))
+        first_row = int(start // line_h)
+        y_off = start % line_h
+
+        clip = pygame.Rect(panel.x + 20, list_top, panel.width - 40, list_bottom - list_top)
+        old_clip = surface.get_clip()
+        surface.set_clip(clip)
+
+        y = list_top - y_off
+        for word in visible_words[first_row:]:
+            if y > list_bottom:
+                break
+            row = pygame.Rect(panel.x + 24, y, panel.width - 56, 24)
+            pygame.draw.rect(surface, PANEL2, row, border_radius=6)
+            pygame.draw.rect(surface, BORDER, row, 1, border_radius=6)
+            blit_text(
+                surface,
+                fit_text_with_ellipsis(word, FONT_SM, row.width - 16),
+                FONT_SM,
+                TEXT,
+                row.x + 8,
+                row.centery,
+                anchor="midleft",
+            )
+            y += line_h
+
+        surface.set_clip(old_clip)
+
+        self._rects["picker"] = None
+        self._rects["picker_options"] = []
+
+        if self._picker_open:
+            selector = letter_selector if self._picker_kind == "letter" else length_selector
+            options = letters if self._picker_kind == "letter" else lengths
+            picker, option_rects = self._picker_rects(selector, options)
+            self._rects["picker"] = picker
+            self._rects["picker_options"] = option_rects
+
+            draw_panel(surface, picker, PANEL2, BORDER, radius=12)
+
+            visible = max(1, (picker.height - 16) // (28 + 4))
+            track, thumb = self._picker_scrollbar_rects(
+                picker, len(options), visible
+            )
+
+            for idx, opt, r in option_rects:
+                selected = (
+                    (self._picker_kind == "letter" and opt == self.letter_filter)
+                    or (self._picker_kind == "length" and opt == self.length_filter)
+                )
+                hovered = r.collidepoint(mouse_pos)
+                fill = BLUE_BG if selected else PANEL
+                border = ACCENT if selected else BORDER
+                if hovered:
+                    fill = lighten(fill, 12)
+                    border = lighten(border, 12)
+
+                pygame.draw.rect(surface, fill, r, border_radius=8)
+                pygame.draw.rect(surface, border, r, 1, border_radius=8)
+                blit_text(
+                    surface,
+                    str(opt),
+                    FONT_SM,
+                    TEXT,
+                    r.x + 10,
+                    r.centery,
+                    anchor="midleft",
+                )
+
+            if track:
+                pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+                pygame.draw.rect(surface, BORDER, track, 1, border_radius=4)
+                pygame.draw.rect(surface, ACCENT, thumb, border_radius=4)
+        
+        track, thumb = self._scrollbar_rects(panel)
+        if track:
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
+
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
+        self._rects["close"] = close_btn
+        draw_button(
+            surface, close_btn, "Close", bg=RED, fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM
+        )
+
+
+class ShowStatisticsModal:
+    STAT_ITEMS = [
+        ("length", "Length"),
+        ("letters", "Letters"),
+        ("pos_letters", "Pos. Letters"),
+        ("vowels", "Vowels"),
+        ("unique", "Unique"),
+        ("first_letter", "1st Letter"),
+        ("last_letter", "Last Letter"),
+        ("bigrams", "Bigrams"),
+        ("syllables", "Syllables"),
+    ]
+
+    def __init__(self):
+        self.visible = False
+        self.words = []
+        self.language = "greek"
+        self.stat_key = "length"
+        self.chart_orientation = "vertical"  # "vertical" | "horizontal"
+        self.pos_index = 0
+        self.ngram_size = 2
+        self.top_n = 15
+        self._picker_open = False
+        self._picker_scroll = 0
+        self._rects = {}
+        self.sort_order = "normal"  # normal | ascend | descend
+        self._sort_picker_open = False
+        self._sort_picker_scroll = 0
+        self._picker_dragging = False
+        self._picker_drag_offset = 0
+
+    def show(self, words, language):
+        self.visible = True
+        self.words = list(words or [])
+        self.language = language
+        self.stat_key = "length"
+        self.chart_orientation = "vertical"
+        self.pos_index = 0
+        self.ngram_size = 2
+        self.top_n = 15
+        self._picker_open = False
+        self._picker_scroll = 0
+        self.sort_order = "normal"
+        self._sort_picker_open = False
+        self._sort_picker_scroll = 0
+        
+    def hide(self):
+        self.visible = False
+        self._picker_open = False
+
+    def _ordered_pairs(self, labels, values):
+        pairs = list(zip(labels, values))
+        if self.sort_order == "ascend":
+            pairs.sort(key=lambda p: (p[1], p[0]))
+        elif self.sort_order == "descend":
+            pairs.sort(key=lambda p: (-p[1], p[0]))
+        return pairs
+    
+    def _panel_rect(self, W, H):
+        pw = min(980, W - 60)
+        ph = min(680, H - 50)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _compute(self):
+        words = self.words
+        letters = _display_alphabet(self.language)
+
+        if self.stat_key == "length":
+            vals = [len(w) for w in words]
+            counter = Counter(vals)
+            labels = [str(i) for i in range(1, max(counter.keys(), default=1) + 1)]
+            data = [counter.get(i, 0) for i in range(1, len(labels) + 1)]
+            summary = _stats_summary(vals)
+            return labels, data, summary, "Counts by length"
+
+        if self.stat_key == "letters":
+            counter = Counter()
+            for w in words:
+                for ch in _word_letters(w, self.language):
+                    counter[ch] += 1
+            data = [counter.get(lbl, 0) for lbl in letters]
+            summary = _stats_summary(data)
+            return letters, data, summary, "Total letter frequency"
+
+        if self.stat_key == "pos_letters":
+            counter = Counter()
+            for w in words:
+                if len(w) > self.pos_index:
+                    ch = _base_letter(w[self.pos_index], self.language)
+                    if ch:
+                        counter[ch] += 1
+            data = [counter.get(lbl, 0) for lbl in letters]
+            summary = _stats_summary(data)
+            return letters, data, summary, f"Letter frequency at position {self.pos_index + 1}"
+
+        if self.stat_key == "vowels":
+            ratios = []
+            for w in words:
+                letters_w = _word_letters(w, self.language)
+                if not letters_w:
+                    continue
+                vc = sum(1 for ch in letters_w if _is_vowel(ch, self.language))
+                ratios.append(vc / len(letters_w))
+            buckets = [(0.0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0)]
+            labels = [_bucket_label(a, b) for a, b in buckets]
+            data = []
+            for a, b in buckets:
+                if b < 1.0:
+                    data.append(sum(1 for r in ratios if a <= r < b))
+                else:
+                    data.append(sum(1 for r in ratios if a <= r <= b))
+            summary = _stats_summary(ratios)
+            return labels, data, summary, "Vowel ratio distribution"
+
+        if self.stat_key == "unique":
+            vals = [len(set(_word_letters(w, self.language))) for w in words if w]
+            counter = Counter(vals)
+            labels = [str(i) for i in range(1, max(counter.keys(), default=1) + 1)]
+            data = [counter.get(i, 0) for i in range(1, len(labels) + 1)]
+            summary = _stats_summary(vals)
+            return labels, data, summary, "Unique letters per word"
+
+        if self.stat_key == "first_letter":
+            counter = Counter()
+            for w in words:
+                if w:
+                    ch = _base_letter(w[0], self.language)
+                    if ch:
+                        counter[ch] += 1
+            data = [counter.get(lbl, 0) for lbl in letters]
+            summary = _stats_summary(data)
+            return letters, data, summary, "Starting-letter frequency"
+
+        if self.stat_key == "last_letter":
+            counter = Counter()
+            for w in words:
+                if w:
+                    ch = _base_letter(w[-1], self.language)
+                    if ch:
+                        counter[ch] += 1
+            data = [counter.get(lbl, 0) for lbl in letters]
+            summary = _stats_summary(data)
+            return letters, data, summary, "Ending-letter frequency"
+
+        if self.stat_key == "bigrams":
+            n = self.ngram_size
+            pairs = _top_ngrams(words, self.language, n=n, top_n=self.top_n)
+            labels = [k.upper() for k, _ in pairs]
+            data = [v for _, v in pairs]
+            summary = _stats_summary(data)
+            title = "Bigram frequency" if n == 2 else "Trigram frequency"
+            return labels, data, summary, title
+
+        # syllables
+        vals = [_estimate_syllables(w, self.language) for w in words if w]
+        counter = Counter(vals)
+        labels = [str(i) for i in range(1, max(counter.keys(), default=1) + 1)]
+        data = [counter.get(i, 0) for i in range(1, len(labels) + 1)]
+        summary = _stats_summary(vals)
+        return labels, data, summary, "Estimated syllables per word"
+
+    def _draw_graph(self, surface, area, labels, values, mouse_pos):
+        if not labels:
+            blit_text(surface, "No data", FONT_MD, MUTED, area.centerx, area.centery, anchor="center")
+            return
+
+        max_v = max(values) if values else 1
+        if max_v <= 0:
+            max_v = 1
+
+        if self.chart_orientation == "vertical":
+            inner = area.inflate(-20, -32)
+            base_y = inner.bottom - 24
+            bar_w = max(10, inner.width // max(1, len(labels) * 2))
+            gap = max(4, (inner.width - bar_w * len(labels)) // max(1, len(labels) - 1))
+            x = inner.left
+            label_font = FONT_SM
+            for lbl, val in zip(labels, values):
+                h = int((inner.height - 40) * (val / max_v))
+                bar = pygame.Rect(x, base_y - h, bar_w, h)
+                pygame.draw.rect(surface, ACCENT, bar, border_radius=6)
+                pygame.draw.rect(surface, BORDER, bar, 1, border_radius=6)
+                if bar.collidepoint(mouse_pos):
+                    blit_text(surface, f"{lbl}: {val}", FONT_SM, TEXT, bar.centerx, bar.y - 8, anchor="midbottom")
+                blit_text(surface, fit_text_with_ellipsis(lbl, label_font, bar_w + 4), label_font, TEXT, bar.centerx, base_y + 6, anchor="midtop")
+                x += bar_w + gap
+        else:
+            inner = area.inflate(-20, -20)
+            row_h = max(22, inner.height // max(1, len(labels)))
+            y = inner.top
+            for lbl, val in zip(labels, values):
+                bar_w = int((inner.width - 120) * (val / max_v))
+                row = pygame.Rect(inner.left, y, inner.width, row_h - 4)
+                bar = pygame.Rect(inner.left + 110, y + 2, bar_w, max(8, row_h - 8))
+                blit_text(surface, fit_text_with_ellipsis(lbl, FONT_SM, 100), FONT_SM, TEXT, row.x, row.centery, anchor="midleft")
+                pygame.draw.rect(surface, ACCENT, bar, border_radius=6)
+                pygame.draw.rect(surface, BORDER, bar, 1, border_radius=6)
+                if bar.collidepoint(mouse_pos):
+                    blit_text(surface, str(val), FONT_SM, TEXT, bar.right + 8, bar.centery, anchor="midleft")
+                y += row_h
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
+
+        panel = self._panel_rect(W, H)
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return True
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if not panel.collidepoint(event.pos):
+                self.hide()
+                return True
+
+            stat_selector = self._rects.get("stat_selector")
+            orient_btn = self._rects.get("orient_btn")
+            sort_btn = self._rects.get("sort_btn")
+
+            if self._picker_open:
+                picker = self._rects.get("picker")
+                if picker and picker.collidepoint(event.pos):
+                    for idx, key, label, r in self._rects.get("picker_items", []):
+                        if r.collidepoint(event.pos):
+                            self.stat_key = key
+                            self._picker_open = False
+                            self._picker_scroll = 0
+                            return True
+                self._picker_open = False
+                return True
+
+            if self._sort_picker_open:
+                picker = self._rects.get("sort_picker")
+                if picker and picker.collidepoint(event.pos):
+                    for idx, key, label, r in self._rects.get("sort_picker_items", []):
+                        if r.collidepoint(event.pos):
+                            self.sort_order = key
+                            self._sort_picker_open = False
+                            self._sort_picker_scroll = 0
+                            return True
+                self._sort_picker_open = False
+                return True
+
+            if stat_selector and stat_selector.collidepoint(event.pos):
+                self._picker_open = True
+                self._picker_scroll = 0
+                return True
+
+            if orient_btn and orient_btn.collidepoint(event.pos):
+                self.chart_orientation = (
+                    "horizontal" if self.chart_orientation == "vertical" else "vertical"
+                )
+                return True
+
+            if sort_btn and sort_btn.collidepoint(event.pos):
+                self._sort_picker_open = not self._sort_picker_open
+                self._sort_picker_scroll = 0
+                return True
+
+            if self.stat_key == "pos_letters" and self._rects.get("pos_selector") and self._rects["pos_selector"].collidepoint(event.pos):
+                max_pos = max(1, max((len(w) for w in self.words), default=1))
+                self.pos_index = (self.pos_index + 1) % max_pos
+                return True
+
+            if self.stat_key == "bigrams" and self._rects.get("ngram_toggle") and self._rects["ngram_toggle"].collidepoint(event.pos):
+                self.ngram_size = 3 if self.ngram_size == 2 else 2
+                return True
+            
+            close_btn = self._rects.get("close")
+            if close_btn and close_btn.collidepoint(event.pos):
+                self.hide()
+                return True
+
+        return True
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, BORDER, radius=16)
+
+        blit_text(surface, "Show Statistics", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+
+        stat_selector = pygame.Rect(panel.x + 24, panel.y + 60, 180, 30)
+        orient_btn = pygame.Rect(panel.right - 180, panel.y + 20, 150, 30)
+        sort_btn = pygame.Rect(panel.right - 180, panel.y + 60, 150, 30)
+
+        self._rects["stat_selector"] = stat_selector
+        self._rects["orient_btn"] = orient_btn
+        self._rects["sort_btn"] = sort_btn
+
+        current_label = dict(self.STAT_ITEMS)[self.stat_key]
+        draw_button(
+            surface,
+            stat_selector,
+            current_label,
+            bg=BLUE_BG,
+            fg=TEXT,
+            hovered=stat_selector.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        draw_button(
+            surface,
+            orient_btn,
+            self.chart_orientation.title(),
+            bg=TEAL,
+            fg=WHITE,
+            hovered=orient_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        draw_button(
+            surface,
+            sort_btn,
+            self.sort_order.title(),
+            bg=PURPLE,
+            fg=WHITE,
+            hovered=sort_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        self._rects["picker"] = None
+        self._rects["picker_items"] = []
+        self._rects["sort_picker"] = None
+        self._rects["sort_picker_items"] = []
+
+        if self._picker_open:
+            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, 240, 270)
+            self._rects["picker"] = picker
+            draw_panel(surface, picker, PANEL2, BORDER, radius=12)
+
+            row_h = 28
+            gap = 4
+            visible = max(1, (picker.height - 16) // (row_h + gap))
+            start = clamp(self._picker_scroll, 0, max(0, len(self.STAT_ITEMS) - visible))
+            items = []
+            for i, (key, label) in enumerate(self.STAT_ITEMS[start : start + visible], start=start):
+                r = pygame.Rect(
+                    picker.x + 10,
+                    picker.y + 8 + (i - start) * (row_h + gap),
+                    picker.width - 20,
+                    row_h,
+                )
+                items.append((i, key, label, r))
+                fill = BLUE_BG if key == self.stat_key else PANEL
+                border = ACCENT if key == self.stat_key else BORDER
+                hovered = r.collidepoint(mouse_pos)
+                if hovered:
+                    fill = lighten(fill, 12)
+                    border = lighten(border, 12)
+
+                pygame.draw.rect(surface, fill, r, border_radius=8)
+                pygame.draw.rect(surface, border, r, 1, border_radius=8)
+                blit_text(surface, label, FONT_SM, TEXT, r.x + 10, r.centery, anchor="midleft")
+            self._rects["picker_items"] = items
+
+        if self._sort_picker_open:
+            picker = pygame.Rect(sort_btn.x, sort_btn.bottom + 6, sort_btn.width, 120)
+            self._rects["sort_picker"] = picker
+            draw_panel(surface, picker, PANEL2, BORDER, radius=12)
+
+            sort_items = [("normal", "Normal"), ("ascend", "Ascend"), ("descend", "Descend")]
+            row_h = 28
+            gap = 4
+            visible = max(1, (picker.height - 16) // (row_h + gap))
+            start = clamp(self._sort_picker_scroll, 0, max(0, len(sort_items) - visible))
+            items = []
+            for i, (key, label) in enumerate(sort_items[start : start + visible], start=start):
+                r = pygame.Rect(picker.x + 10, picker.y + 8 + (i - start) * (row_h + gap), picker.width - 20, row_h)
+                items.append((i, key, label, r))
+                fill = BLUE_BG if key == self.sort_order else PANEL
+                border = ACCENT if key == self.sort_order else BORDER
+                hovered = r.collidepoint(mouse_pos)
+                if hovered:
+                    fill = lighten(fill, 12)
+                    border = lighten(border, 12)
+                pygame.draw.rect(surface, fill, r, border_radius=8)
+                pygame.draw.rect(surface, border, r, 1, border_radius=8)
+                blit_text(surface, label, FONT_SM, TEXT, r.x + 10, r.centery, anchor="midleft")
+            self._rects["sort_picker_items"] = items
+        
+        subtitle_y = panel.y + 60
+        main_right = stat_selector.right + 12
+
+        if self.stat_key == "pos_letters":
+            max_pos = max(1, max((len(w) for w in self.words), default=1))
+            extra_btn = pygame.Rect(main_right, subtitle_y, 170, 30)
+            self._rects["pos_selector"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                f"Position: {self.pos_index + 1}/{max_pos}",
+                bg=BLUE_BG,
+                fg=TEXT,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+            subtitle_x = extra_btn.right + 12
+        elif self.stat_key == "bigrams":
+            extra_btn = pygame.Rect(main_right, subtitle_y, 120, 30)
+            self._rects["ngram_toggle"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                "Bi" if self.ngram_size == 2 else "Tri",
+                bg=PURPLE,
+                fg=WHITE,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+            subtitle_x = extra_btn.right + 12
+        else:
+            self._rects["pos_selector"] = None
+            self._rects["ngram_toggle"] = None
+            subtitle_x = main_right
+
+        labels, values, summary, subtitle = self._compute()
+        pairs = self._ordered_pairs(labels, values)
+        labels = [p[0] for p in pairs]
+        values = [p[1] for p in pairs]
+
+        graph_area = pygame.Rect(
+            panel.x + 24,
+            panel.y + 90,
+            panel.width - 50,
+            panel.height - 240,
+        )
+        self._draw_graph(surface, graph_area, labels, values, mouse_pos)
+
+        if values:
+            min_v = min(values)
+            max_v = max(values)
+        else:
+            min_v = 0
+            max_v = 0
+
+        mean_v, median_v, std_v = summary
+        summary = f"Mean: {mean_v:.2f}  {special_chars["*"]}  Median: {median_v:.2f}  {special_chars["*"]}  Std Dev: {std_v:.2f}  {special_chars["*"]}  Min: {min_v:.2f}  {special_chars["*"]}  Max: {max_v:.2f}"
+
+        blit_text(surface, summary, FONT_SM, MUTED, panel.x + 24, panel.bottom - 36)
+
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
+        self._rects["close"] = close_btn
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=RED,
+            fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+
 # ══════════════════════════════════════════════════════════════════
 #  Background enrichment worker (runs in a thread, reports via queue)
 # ══════════════════════════════════════════════════════════════════
@@ -3077,6 +4214,7 @@ class SearchJob:
         valid_sets=None,
         invalid_sets=None,
         exist_letters=None,
+        absent_letters=None,
         ph_word_length_all=False,
         ph_slots=None,
         ph_slot_count=None,
@@ -3089,6 +4227,7 @@ class SearchJob:
         self.valid_sets = valid_sets or []
         self.invalid_sets = invalid_sets or []
         self.exist_letters = exist_letters or Counter()
+        self.absent_letters = list(absent_letters or [])
         self.ph_word_length_all = ph_word_length_all
         self.ph_slots = ph_slots or {}
         self.ph_slot_count = ph_slot_count or {}
@@ -3119,6 +4258,18 @@ class SearchJob:
                 if self.invalid_sets[pos] and ch in self.invalid_sets[pos]:
                     return False
 
+            if self.absent_letters:
+                wc = Counter(word)
+                for key in self.absent_letters:
+                    if self.language == "greek":
+                        group = GREEK_GROUP_BY_FIRST.get(key, (key,))
+                    elif self.language == "english":
+                        group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
+                    else:
+                        group = (key,)
+                    if sum(wc[ch] for ch in group) > 0:
+                        return False
+                    
             if self.exist_letters:
                 wc = Counter(word)
                 for key, needed in self.exist_letters.items():
@@ -3164,9 +4315,21 @@ class SearchJob:
                 for p in self.ph_slots[row]["exist"][: self.ph_slot_count[row]["exist"]]
                 if p["seq"]
             ]
+            absent_pats = [
+                p
+                for p in self.ph_slots[row]["absent"][: self.ph_slot_count[row]["absent"]]
+                if p["seq"]
+            ]
+            for pat in absent_pats:
+                for variant in _exist_variants(pat):
+                    if variant and variant in word:
+                        return False
 
             if row == "start":
                 if not _check_start_exist(word, exist_pats):
+                    return False
+            elif row == "inner":
+                if not _check_inner_exist(word, exist_pats):
                     return False
             elif row == "middle":
                 if not _check_middle_exist(word, exist_pats):
@@ -3280,14 +4443,20 @@ class AppState:
         # ── Letter Match state ──
         self.input_mode = "valid"  # valid / invalid / exist
         self.exist_letters = Counter()
+        self.absent_letters = []
         self.selected_pos = 0
         self.selected_exist_idx = 0  # for navigating exist letter items
+        self.selected_absent_idx = 0  # for navigating absent letter items
         self.valid_sets = [set() for _ in range(5)]
         self.invalid_sets = [set() for _ in range(5)]
         # Store letter data per length, so expanding/shrinking preserves data
         self._stored_valid = {}  # pos -> set
         self._stored_invalid = {}  # pos -> set
         self._prev_word_length = 5
+
+        self.keyboard_on = False
+        self.keyboard_shift = False
+        self.keyboard_tone = 0  # 0=plain, 1=tonos, 2=diaeresis, 3=both
 
         # ── Pattern Hunt state ──
         self.finder_mode = "letter_match"  # letter_match / pattern_hunt
@@ -3559,9 +4728,9 @@ def refresh_summary_window():
             lines.append(f"  {special_chars["-"]}")
     else:
         # Pattern Hunt
-        for row_name in ["start", "middle", "end"]:
+        for row_name in ["start", "inner", "middle", "end"]:
             lines.append(row_name.upper())
-            for col_name in ["valid", "invalid", "exist"]:
+            for col_name in ["valid", "invalid", "exist", "absent"]:
                 lines.append(f"  [{col_name.upper()}]")
                 count = state.ph_slot_count[row_name][col_name]
                 for i in range(count):
@@ -3573,7 +4742,7 @@ def refresh_summary_window():
                         tag = " [expanded]" if exp else ""
                         lines.append(f"    {i+1}: {disp}{tag}")
                     else:
-                        lines.append(f"    {i+1}: {special_chars["-"]}")
+                        lines.append(f"    {i+1}: {special_chars['-']}")
             lines.append("")
     summary_text.delete("1.0", END)
     summary_text.insert("1.0", "\n".join(lines))
@@ -3838,6 +5007,7 @@ def do_search():
             valid_sets=[set(s) for s in state.valid_sets],
             invalid_sets=[set(s) for s in state.invalid_sets],
             exist_letters=Counter(state.exist_letters),
+            absent_letters=list(state.absent_letters),
             source_name=os.path.basename(state.active_file()),
         )
     else:
@@ -4037,6 +5207,77 @@ def refresh_visible_results():
         for w in state.search_results
         if state.results_status_map.get(w) in state.status_filters
     ]
+
+
+def _display_alphabet(language: str):
+    if language == "greek":
+        return [group[0].upper() for group in GREEK_GROUPS]
+    return [ch.upper() for ch in ENGLISH_LETTERS]
+
+
+def _base_letter(ch: str, language: str):
+    if not ch or not ch.isalpha():
+        return None
+    if language == "greek":
+        return GREEK_CHAR_TO_FIRST.get(ch, ch).upper()
+    return ch.upper()
+
+
+def _word_letters(word: str, language: str):
+    return [_base_letter(ch, language) for ch in word if _base_letter(ch, language)]
+
+
+def _is_vowel(ch: str, language: str):
+    if not ch:
+        return False
+    if language == "greek":
+        return ch in {"Α", "Ε", "Η", "Ι", "Ο", "Υ", "Ω"}
+    return ch in {"A", "E", "I", "O", "U", "Y"}
+
+
+def _count_vowel_groups(word: str, language: str):
+    letters = _word_letters(word, language)
+    if not letters:
+        return 0
+    groups = 0
+    in_group = False
+    for ch in letters:
+        if _is_vowel(ch, language):
+            if not in_group:
+                groups += 1
+                in_group = True
+        else:
+            in_group = False
+    if language == "english" and letters[-1] == "E" and groups > 1:
+        groups -= 1
+    return max(groups, 1)
+
+
+def _estimate_syllables(word: str, language: str):
+    # Simple vowel-group heuristic with a light English silent-E adjustment.
+    return _count_vowel_groups(word, language)
+
+
+def _stats_summary(values):
+    if not values:
+        return (0, 0, 0)
+    if len(values) == 1:
+        return (values[0], values[0], 0)
+    return (mean(values), median(values), pstdev(values))
+
+
+def _bucket_label(start_frac, end_frac):
+    return f"{int(start_frac * 100)}–{int(end_frac * 100)}%"
+
+
+def _top_ngrams(words, language, n=2, top_n=15):
+    counter = Counter()
+    for word in words:
+        letters = _word_letters(word, language)
+        for i in range(len(letters) - n + 1):
+            seq = "".join(letters[i : i + n])
+            counter[seq] += 1
+    return counter.most_common(top_n)
 
 
 def get_word_translation(word, language):
@@ -4278,13 +5519,23 @@ def render_controls(mouse_pos):
 
     # ── Main mode pill toggle ───────────────────────────────────────
     if state.finder_mode == "letter_match":
-        mode_labels = ["Valid", "Invalid", "Exist"]
-        mode_colors = [GREEN, RED, BROWN]
-        mode_idx = {"valid": 0, "invalid": 1, "exist": 2}[state.input_mode]
+        mode_labels = ["Valid", "Invalid", "Exist", "Absent"]
+        mode_colors = [GREEN, RED, BROWN, ORANGE]
+        mode_idx = {
+            "valid": 0,
+            "invalid": 1,
+            "exist": 2,
+            "absent": 3,
+        }[state.input_mode]
     else:
-        mode_labels = ["Start", "Middle", "End"]
-        mode_colors = [TEAL, PURPLE, PINK]
-        mode_idx = {"start": 0, "middle": 1, "end": 2}[state.ph_mode]
+        mode_labels = ["Start", "Inner", "Middle", "End"]
+        mode_colors = [TEAL, CYAN, PURPLE, PINK]
+        mode_idx = {
+            "start": 0,
+            "inner": 1,
+            "middle": 2,
+            "end": 3,
+        }[state.ph_mode]
 
     m_rect = pygame.Rect(mode_x, pill_y_top, mode_w, pill_h)
     m_rects = draw_pill_toggle(
@@ -4300,9 +5551,14 @@ def render_controls(mouse_pos):
     ph_col_rects = None
     if state.finder_mode == "pattern_hunt":
         ph_col_rect = pygame.Rect(mode_x, pill_y_bottom, mode_w, pill_h)
-        ph_col_labels = ["Valid", "Invalid", "Exist"]
-        ph_col_colors = [GREEN, RED, BROWN]
-        ph_col_idx = {"valid": 0, "invalid": 1, "exist": 2}[state.ph_col]
+        ph_col_labels = ["Valid", "Invalid", "Exist", "Absent"]
+        ph_col_colors = [GREEN, RED, BROWN, ORANGE]
+        ph_col_idx = {
+            "valid": 0,
+            "invalid": 1,
+            "exist": 2,
+            "absent": 3,
+        }[state.ph_col]
         ph_col_rects = draw_pill_toggle(
             screen,
             ph_col_rect,
@@ -4333,7 +5589,7 @@ def render_controls(mouse_pos):
         lang_rect,
         ["Greek", "English"],
         0 if state.language == "greek" else 1,
-        [ACCENT, ACCENT],
+        [CYAN, CYAN],
         hovered=lang_rect.collidepoint(mouse_pos),
     )
 
@@ -4507,7 +5763,7 @@ def render_file_row(mouse_pos):
         screen,
         theme_btn,
         theme_label,
-        CYAN,
+        ACCENT,
         WHITE,
         radius=7,
         hovered=theme_btn.collidepoint(mouse_pos),
@@ -4621,11 +5877,14 @@ def render_workspace_lm(mouse_pos):
 
     # ── Hint line ─────────────────────────────────────────────────
     hint_y = ty + slot_h - 10
-    mc = (
-        GREEN
-        if state.input_mode == "valid"
-        else (RED if state.input_mode == "invalid" else BROWN)
-    )
+    if state.input_mode == "valid":
+        mc = GREEN
+    if state.input_mode == "invalid":
+        mc = RED
+    if state.input_mode == "exist":
+        mc = BROWN
+    if state.input_mode == "absent":
+        mc = ORANGE
     blit_text(
         screen,
         f"Position {state.selected_pos + 1}  |  Mode:",
@@ -4702,11 +5961,19 @@ def render_workspace_lm(mouse_pos):
                 hover_pos = mouse_pos
         table_y += row_h + 6
 
-    # ── Exist row ─────────────────────────────────────────────────
+    # ── Exist + Absent rows ─────────────────────────────────────────
     exist_items = state.get_exist_items()
+    absent_items = list(enumerate(state.absent_letters))
+
     exist_row_h = row_h
-    exist_rect = pygame.Rect(PAD, table_y, WIDTH - 2 * PAD, exist_row_h)
+    half_w = (WIDTH - 3 * PAD) // 2
+    exist_rect = pygame.Rect(PAD, table_y, half_w, exist_row_h)
+    absent_rect = pygame.Rect(exist_rect.right + PAD, table_y, half_w, exist_row_h)
+
     lm_ui["exist_row"] = exist_rect
+    lm_ui["absent_row"] = absent_rect
+    lm_ui["exist_chips"] = []
+    lm_ui["absent_chips"] = []
 
     # Highlighted border for exist row when mode is "exist"
     if state.input_mode == "exist":
@@ -4719,6 +5986,18 @@ def render_workspace_lm(mouse_pos):
     pygame.draw.rect(screen, BROWN_BG, exist_rect, border_radius=8)
     pygame.draw.rect(screen, exist_bdr_col, exist_rect, exist_bdr_w, border_radius=8)
     blit_text(screen, "EXIST", FONT_MD, BROWN, PAD + 6, table_y + exist_row_h // 2 - 10)
+
+    # Highlight Absent row when mode is "absent"
+    if state.input_mode == "absent":
+        absent_bdr_col = ORANGE
+        absent_bdr_w = 3
+    else:
+        absent_bdr_col = ORANGE_BDR if "ORANGE_BDR" in globals() else BORDER
+        absent_bdr_w = 1
+
+    pygame.draw.rect(screen, ORANGE_BG, absent_rect, border_radius=8)
+    pygame.draw.rect(screen, absent_bdr_col, absent_rect, absent_bdr_w, border_radius=8)
+    blit_text(screen, "ABSENT", FONT_MD, ORANGE, absent_rect.x + 6, table_y + exist_row_h // 2 - 10)
 
     if exist_items:
         # Draw each exist item as a small chip, navigatable
@@ -4757,6 +6036,45 @@ def render_workspace_lm(mouse_pos):
     else:
         img = FONT_SM.render(f"{special_chars["-"]}", True, MUTED)
         screen.blit(img, img.get_rect(midleft=(PAD + 90, table_y + exist_row_h // 2)))
+
+    if absent_items:
+        chip_x = absent_rect.x + 90
+        chip_gap = 8
+        chip_y = table_y + 4
+        chip_h = exist_row_h - 8
+        absent_rects_local = []
+
+        for ai, key in absent_items:
+            if state.language == "greek":
+                group = GREEK_GROUP_BY_FIRST.get(key, (key,))
+            else:
+                group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
+            label = "".join(group)
+            disp = label
+
+            tw_chip = FONT_SM.size(disp)[0] + 16
+            chip_rect = pygame.Rect(chip_x, chip_y, tw_chip, chip_h)
+            lm_ui["absent_chips"].append((ai, chip_rect))
+
+            is_sel = state.input_mode == "absent" and ai == state.selected_absent_idx
+            chip_bg = ORANGE_BDR if is_sel else ORANGE_BG
+            chip_bdr = ORANGE if is_sel else ORANGE_BDR
+            chip_bdr_w = 2 if is_sel else 1
+
+            pygame.draw.rect(screen, chip_bg, chip_rect, border_radius=6)
+            pygame.draw.rect(screen, chip_bdr, chip_rect, chip_bdr_w, border_radius=6)
+            img = FONT_SM.render(disp, True, ORANGE if is_sel else TEXT)
+            screen.blit(img, img.get_rect(midleft=(chip_x + 8, chip_y + chip_h // 2)))
+
+            if chip_rect.collidepoint(mouse_pos):
+                hover_text = f"Absent: {disp}"
+                hover_pos = mouse_pos
+
+            absent_rects_local.append(chip_rect)
+            chip_x += tw_chip + chip_gap
+    else:
+        img = FONT_SM.render(f"{special_chars['-']}", True, MUTED)
+        screen.blit(img, img.get_rect(midleft=(absent_rect.x + 90, table_y + exist_row_h // 2)))
 
     table_y += exist_row_h + 6
 
@@ -4802,19 +6120,18 @@ def render_workspace_ph(mouse_pos):
         font=FONT_MD,
     )
 
-    col_labels = ["Valid", "Invalid", "Exist"]
-    col_colors = [GREEN, RED, BROWN]
-    col_bg = [GREEN_BG, RED_BG, BROWN_BG]
-    row_labels = ["Start", "Middle", "End"]
-    row_colors = [TEAL, PURPLE, PINK]
-    row_bg = [TEAL_BG, PURPLE_BG, PINK_BG]
+    col_labels = ["Valid", "Invalid", "Exist", "Absent"]
+    col_colors = [GREEN, RED, BROWN, ORANGE]
+    col_bg = [GREEN_BG, RED_BG, BROWN_BG, BROWN_BG]
+    row_labels = ["Start", "Inner", "Middle", "End"]
+    row_colors = [TEAL, CYAN, PURPLE, PINK]
 
     grid_left = PAD + LEFT_LABEL_W
     grid_right = WIDTH - PAD
     col_gap = 10
-    cols = 3
-    cell_w = max(190, (grid_right - grid_left - (cols - 1) * col_gap) // cols)
-    cell_h = 44
+    cols = 4
+    cell_w = max(130, (grid_right - grid_left - (cols - 1) * col_gap) // cols)
+    cell_h = 34
     row_gap = 10
     header_y = top_y - 10
     row_start_y = header_y + 28
@@ -5065,7 +6382,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         screen,
         toggle_rect,
         "color on" if state.colorize_status else "color off",
-        bg=TEAL if state.colorize_status else BROWN,
+        bg=ORANGE if state.colorize_status else BROWN,
         fg=WHITE,
         radius=8,
         hovered=hovered_toggle,
@@ -5125,6 +6442,50 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     _results_legend_rects["toggle"] = toggle_rect
     _results_legend_rects["items"] = legend_rects
 
+    show_words_rect = pygame.Rect(panel.x + PAD, legend_y - 11, 118, 22)
+    show_stats_rect = pygame.Rect(show_words_rect.right + 8, legend_y - 11, 138, 22)
+
+    keyboard_rect = pygame.Rect(panel.centerx - 66, legend_y - 11, 132, 22)
+    _results_action_rects["keyboard"] = keyboard_rect
+    _results_action_rects["show_words"] = show_words_rect
+    _results_action_rects["show_stats"] = show_stats_rect
+
+    draw_button(
+        screen,
+        keyboard_rect,
+        "keyboard on" if state.keyboard_on else "keyboard off",
+        bg=ORANGE if state.keyboard_on else BROWN,
+        fg=WHITE,
+        radius=8,
+        hovered=keyboard_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+
+    draw_button(
+        screen,
+        show_words_rect,
+        "Show Words",
+        bg=TEAL,
+        fg=WHITE,
+        radius=8,
+        hovered=show_words_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+    draw_button(
+        screen,
+        show_stats_rect,
+        "Show Statistics",
+        bg=PURPLE,
+        fg=WHITE,
+        radius=8,
+        hovered=show_stats_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+
+    keyboard_top = panel.bottom - 8
+    if state.keyboard_on:
+        keyboard_top = draw_virtual_keyboard(screen, panel, mouse_pos)
+
     preview = panel_words[state.preview_start : state.preview_start + state.max_preview]
     if not preview:
         msg = (
@@ -5147,6 +6508,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     cw = (panel.width - 2 * PAD - (cols - 1) * GAP) // cols
     ch_h = 26
 
+    grid_bottom = (keyboard_top - 8) if state.keyboard_on else (panel.bottom - 8)
+
     _hover_word_rect = None
 
     for idx, word in enumerate(preview):
@@ -5154,7 +6517,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         row = idx // cols
         wx = panel.x + PAD + col * (cw + GAP)
         wy = grid_y + row * (ch_h + 4)
-        if wy + ch_h > panel.bottom - 8:
+        if wy + ch_h > grid_bottom:
             break
 
         wr = pygame.Rect(wx, wy, cw, ch_h)
@@ -5268,6 +6631,8 @@ if __name__ == "__main__":
     info_modal = InfoModal()
     progress_modal = ProgressModal()
     enrichment_modal = EnrichmentModal()
+    words_modal = ShowWordsModal()
+    stats_modal = ShowStatisticsModal()
     dragging = None  # None | 'wl' | 'mp'
     running = True
 
@@ -5329,6 +6694,8 @@ if __name__ == "__main__":
         info_modal.draw(screen, WIDTH, HEIGHT)
         progress_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         enrichment_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        words_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        stats_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
 
         if summary_win is not None and summary_win.winfo_exists():
             try:
@@ -5366,6 +6733,12 @@ if __name__ == "__main__":
             if modal_was_open:
                 continue
 
+            if words_modal.visible and words_modal.handle_event(event, WIDTH, HEIGHT):
+                continue
+
+            if stats_modal.visible and stats_modal.handle_event(event, WIDTH, HEIGHT):
+                continue
+
             if event.type == pygame.MOUSEBUTTONDOWN:
                 mx, my = event.pos
                 btn = event.button
@@ -5387,14 +6760,19 @@ if __name__ == "__main__":
                             state.input_mode = "valid"
                         else:
                             state.ph_mode = "start"
+                    elif mode_rects[2].collidepoint(mx, my):
+                        if state.finder_mode == "letter_match":
+                            state.input_mode = "exist"
+                        else:
+                            state.ph_mode = "inner"
                     elif mode_rects[1].collidepoint(mx, my):
                         if state.finder_mode == "letter_match":
                             state.input_mode = "invalid"
                         else:
                             state.ph_mode = "middle"
-                    elif mode_rects[2].collidepoint(mx, my):
+                    elif mode_rects[3].collidepoint(mx, my):
                         if state.finder_mode == "letter_match":
-                            state.input_mode = "exist"
+                            state.input_mode = "absent"
                         else:
                             state.ph_mode = "end"
 
@@ -5406,18 +6784,14 @@ if __name__ == "__main__":
                             open_summary_window()
 
                     # PH column toggle (Valid/Invalid/Exist row under Start/Middle/End)
-                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(
-                        mx, my
-                    ):
+                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(mx, my):
                         state.ph_col = "valid"
-                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(
-                        mx, my
-                    ):
+                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(mx, my):
                         state.ph_col = "invalid"
-                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(
-                        mx, my
-                    ):
+                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(mx, my):
                         state.ph_col = "exist"
+                    elif ph_col_rects is not None and ph_col_rects[3].collidepoint(mx, my):
+                        state.ph_col = "absent"
 
                     # Translate / Meaning checkboxes
                     elif translate_chk_rect.collidepoint(mx, my):
@@ -5561,6 +6935,22 @@ if __name__ == "__main__":
                                     state.input_mode = "exist"
                                     clicked = True
 
+                            # ABSENT chips (specific item)
+                            if not clicked:
+                                for ai, chip in lm_ui.get("absent_chips", []):
+                                    if chip.collidepoint(mx, my):
+                                        state.input_mode = "absent"
+                                        state.selected_absent_idx = ai
+                                        clicked = True
+                                        break
+
+                            # ABSENT row
+                            if not clicked:
+                                absent_row = lm_ui.get("absent_row")
+                                if absent_row is not None and absent_row.collidepoint(mx, my):
+                                    state.input_mode = "absent"
+                                    clicked = True
+
                         else:
                             # PH grid clicks
                             clicked_ph = False
@@ -5590,6 +6980,30 @@ if __name__ == "__main__":
                                 if clicked_ph:
                                     break
 
+                        if state.keyboard_on and _results_keyboard_rects.get("panel") is not None:
+                            kp = _results_keyboard_rects["panel"]
+                            if kp.collidepoint(mx, my):
+                                controls = _results_keyboard_rects.get("controls", {})
+                                if controls.get("lang") and controls["lang"].collidepoint(mx, my):
+                                    state.language = "english" if state.language == "greek" else "greek"
+                                    state.status = f"Language: {state.language.title()}"
+                                    state.results_cache_dirty = True
+                                    break
+                                if controls.get("shift") and controls["shift"].collidepoint(mx, my):
+                                    state.keyboard_shift = not state.keyboard_shift
+                                    break
+                                if controls.get("tone") and controls["tone"].collidepoint(mx, my):
+                                    state.keyboard_tone = (state.keyboard_tone + 1) % 4
+                                    break
+                                if controls.get("backspace") and controls["backspace"].collidepoint(mx, my):
+                                    handle_backspace_input()
+                                    break
+                                for base, r in _results_keyboard_rects.get("keys", []):
+                                    if r.collidepoint(mx, my):
+                                        handle_text_input(keyboard_char_for(base))
+                                        break
+                                break
+
                         # Results panel word selection (left click = save)
                         for word, wr in _result_word_rects:
                             if wr.collidepoint(mx, my):
@@ -5598,6 +7012,19 @@ if __name__ == "__main__":
                                 else:
                                     state.word_selections[word] = "save"
                                 break
+
+                        # Results action buttons
+                        if _results_action_rects.get("keyboard") is not None and _results_action_rects["keyboard"].collidepoint(mx, my):
+                            state.keyboard_on = not state.keyboard_on
+                            break
+
+                        if _results_action_rects.get("show_words") is not None and _results_action_rects["show_words"].collidepoint(mx, my):
+                            words_modal.show(state.results_visible_words, state.language)
+                            break
+
+                        if _results_action_rects.get("show_stats") is not None and _results_action_rects["show_stats"].collidepoint(mx, my):
+                            stats_modal.show(state.results_visible_words, state.language)
+                            break
 
                         # Results legend toggles
                         if _results_legend_rects.get(
