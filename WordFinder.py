@@ -695,7 +695,7 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
 
     blit_text(
         surface,
-        "Virtual Keyboard",
+        f"Virtual Keyboard {special_chars['kb']}",
         FONT_SM,
         MUTED,
         kb_rect.centerx,
@@ -708,86 +708,230 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
 
     rows = _keyboard_rows()
 
-    # Letter rows start higher than before
+    row1 = rows[0]
+    row2 = rows[1]
+    row3 = rows[2]
+
+    # ---------------------------------------------------------
+    # Layout constants
+    # ---------------------------------------------------------
     row_top_1 = kb_rect.y + 28
     row_h = 22
     row_gap = 5
-    key_gap = 5
+    key_gap = 20
+
+    # Widths of the non-letter controls
+    backspace_w = 90
+    shift_w = 80
+    lang_btn_w = 220
+    tone_w = 80
+
+    # Row 1 available width for letters
+    row1_available = (
+        kb_rect.width
+        - 16
+        - backspace_w
+        - key_gap
+    )
+
+    row1_letter_w = (
+        row1_available - (len(row1) - 1) * key_gap
+    ) // len(row1)
+
+    # Row 2 available width for letters
+    row2_available = (
+        kb_rect.width
+        - 16
+        - shift_w
+        - tone_w
+        - 2 * key_gap
+    )
+
+    row2_letter_w = (
+        row2_available - (len(row2) - 1) * key_gap
+    ) // len(row2)
+
+    # Row 3 is split around the language button
+    lang_left = kb_rect.centerx - lang_btn_w // 2
+    lang_right = kb_rect.centerx + lang_btn_w // 2
+
+    row3_left_available = (
+        lang_left
+        - (kb_rect.x + 8)
+        - key_gap
+    )
+
+    row3_right_available = (
+        (kb_rect.right - 8)
+        - lang_right
+        - key_gap
+    )
+
+    left_keys = row3[:len(row3) // 2 + 1]
+    right_keys = row3[len(row3) // 2 + 1:]
+
+    if left_keys:
+        row3_left_letter_w = (
+            row3_left_available
+            - (len(left_keys) - 1) * key_gap
+        ) // len(left_keys)
+    else:
+        row3_left_letter_w = row1_letter_w
+
+    if right_keys:
+        row3_right_letter_w = (
+            row3_right_available
+            - (len(right_keys) - 1) * key_gap
+        ) // len(right_keys)
+    else:
+        row3_right_letter_w = row1_letter_w
+
+    # The smallest calculated width is the width that fits
+    # in every row.
+    letter_w = max(
+        24,
+        min(
+            row1_letter_w,
+            row2_letter_w,
+            row3_left_letter_w,
+            row3_right_letter_w,
+        ),
+    )
 
     # Row 1
-    row1 = rows[0]
-    row1_letter_w = max(24, (kb_rect.width - 16 - 2 * key_gap - 82) // len(row1))
     start_x1 = kb_rect.x + 8
+
     for i, base in enumerate(row1):
-        r = pygame.Rect(start_x1 + i * (row1_letter_w + key_gap), row_top_1, row1_letter_w, row_h)
-        key_rects.append((base, r))
-        draw_button(
-            surface, r, keyboard_char_for(base),
-            bg=BLUE_BG, fg=TEXT, radius=7,
-            hovered=r.collidepoint(mouse_pos), font=FONT_SM
+        r = pygame.Rect(
+            start_x1 + i * (letter_w + key_gap),
+            row_top_1,
+            letter_w,
+            row_h,
         )
 
-    # Backspace at the right of row 1, after π / p
-    back_rect = pygame.Rect(kb_rect.right - 82, row_top_1, 74, row_h)
+        key_rects.append((base, r))
+
+        draw_button(
+            surface,
+            r,
+            keyboard_char_for(base),
+            bg=BLUE_BG,
+            fg=TEXT,
+            radius=7,
+            hovered=r.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+    # Backspace
+    back_rect = pygame.Rect(
+        kb_rect.right - backspace_w - 8,
+        row_top_1,
+        backspace_w,
+        row_h,
+    )
+
     controls["backspace"] = back_rect
+
     draw_button(
-        surface, back_rect, "Backspace",
-        bg=RED, fg=WHITE, radius=7,
-        hovered=back_rect.collidepoint(mouse_pos), font=FONT_SM
+        surface,
+        back_rect,
+        "Backspace",
+        bg=RED,
+        fg=WHITE,
+        radius=7,
+        hovered=back_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
     )
 
     # Row 2
     row2_y = row_top_1 + row_h + row_gap
-    row2 = rows[1]
 
-    shift_rect = pygame.Rect(kb_rect.x + 8, row2_y, 74, row_h)
-    controls["shift"] = shift_rect
-    draw_button(
-        surface, shift_rect,
-        "Shift on" if state.keyboard_shift else "Shift off",
-        bg=ORANGE if state.keyboard_shift else BROWN,
-        fg=WHITE, radius=7,
-        hovered=shift_rect.collidepoint(mouse_pos), font=FONT_SM
+    # Shift
+    shift_rect = pygame.Rect(
+        kb_rect.x + 8,
+        row2_y,
+        shift_w,
+        row_h,
     )
 
-    row2_letter_w = max(24, (kb_rect.width - 16 - 74 - 82 - 2 * key_gap) // len(row2))
+    controls["shift"] = shift_rect
+
+    draw_button(
+        surface,
+        shift_rect,
+        "Shift on" if state.keyboard_shift else "Shift off",
+        bg=ORANGE if state.keyboard_shift else BROWN,
+        fg=WHITE,
+        radius=7,
+        hovered=shift_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+
+    # Row 2 letters
     row2_start_x = shift_rect.right + key_gap
+
     for i, base in enumerate(row2):
-        r = pygame.Rect(row2_start_x + i * (row2_letter_w + key_gap), row2_y, row2_letter_w, row_h)
-        key_rects.append((base, r))
-        draw_button(
-            surface, r, keyboard_char_for(base),
-            bg=BLUE_BG, fg=TEXT, radius=7,
-            hovered=r.collidepoint(mouse_pos), font=FONT_SM
+        r = pygame.Rect(
+            row2_start_x + i * (letter_w + key_gap),
+            row2_y,
+            letter_w,
+            row_h,
         )
 
-    tone_labels = ["Tone off", "Tonos", "Diaeresis", "Both"]
-    tone_rect = pygame.Rect(kb_rect.right - 74, row2_y, 74, row_h)
+        key_rects.append((base, r))
+
+        draw_button(
+            surface,
+            r,
+            keyboard_char_for(base),
+            bg=BLUE_BG,
+            fg=TEXT,
+            radius=7,
+            hovered=r.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+    # Tone button
+    tone_labels = [
+        "Tone off",
+        "Tonos",
+        "Diaeresis",
+        "Both",
+    ]
+
+    tone_rect = pygame.Rect(
+        kb_rect.right - tone_w - 8,
+        row2_y,
+        tone_w,
+        row_h,
+    )
+
     controls["tone"] = tone_rect
+
     draw_button(
-        surface, tone_rect, tone_labels[state.keyboard_tone],
+        surface,
+        tone_rect,
+        tone_labels[state.keyboard_tone],
         bg=PURPLE if state.keyboard_tone else DARK,
-        fg=WHITE, radius=7,
-        hovered=tone_rect.collidepoint(mouse_pos), font=FONT_SM
+        fg=WHITE,
+        radius=7,
+        hovered=tone_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
     )
 
     # Row 3
     row3_y = row2_y + row_h + row_gap
-    row3 = rows[2]
 
-    row3_letter_area_w = kb_rect.width - 16
-    letter_w3 = max(24, (row3_letter_area_w - 2 * key_gap - 220) // len(row3))
-    total_letters_w = len(row3) * letter_w3 + (len(row3) - 1) * key_gap
-
-    # Put Greek/English as a large centered "space button"
-    lang_btn_w = 186
+    # Language button
     lang_rect = pygame.Rect(
         kb_rect.centerx - lang_btn_w // 2,
         row3_y,
         lang_btn_w,
         row_h,
     )
+
     controls["lang"] = lang_rect
+
     draw_button(
         surface,
         lang_rect,
@@ -799,35 +943,61 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
         font=FONT_SM,
     )
 
-    left_letters_w = max(0, (lang_rect.left - (kb_rect.x + 8) - key_gap))
-    right_letters_x = lang_rect.right + key_gap
-
-    # Left-side letters
-    left_keys = row3[: max(0, len(row3) // 2)]
-    right_keys = row3[max(0, len(row3) // 2):]
-
-    # Draw left-side letters evenly
+    # Row 3 left letters
     if left_keys:
-        left_w = max(24, (left_letters_w - (len(left_keys) - 1) * key_gap) // len(left_keys))
         lx = kb_rect.x + 8
+
         for i, base in enumerate(left_keys):
-            r = pygame.Rect(lx + i * (left_w + key_gap), row3_y, left_w, row_h)
-            key_rects.append((base, r))
-            draw_button(surface, r, keyboard_char_for(base), bg=BLUE_BG, fg=TEXT, radius=7, hovered=r.collidepoint(mouse_pos), font=FONT_SM)
+            r = pygame.Rect(
+                lx + i * (letter_w + key_gap),
+                row3_y,
+                letter_w,
+                row_h,
+            )
 
-    # Draw right-side letters
+            key_rects.append((base, r))
+
+            draw_button(
+                surface,
+                r,
+                keyboard_char_for(base),
+                bg=BLUE_BG,
+                fg=TEXT,
+                radius=7,
+                hovered=r.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+
+    # Row 3 right letters
     if right_keys:
-        right_area_w = (kb_rect.right - 8) - right_letters_x
-        right_w = max(24, (right_area_w - (len(right_keys) - 1) * key_gap) // len(right_keys))
-        rx = right_letters_x
-        for i, base in enumerate(right_keys):
-            r = pygame.Rect(rx + i * (right_w + key_gap), row3_y, right_w, row_h)
-            key_rects.append((base, r))
-            draw_button(surface, r, keyboard_char_for(base), bg=BLUE_BG, fg=TEXT, radius=7, hovered=r.collidepoint(mouse_pos), font=FONT_SM)
+        rx = lang_rect.right + 5.0 * key_gap
 
+        for i, base in enumerate(right_keys):
+            r = pygame.Rect(
+                rx + i * (letter_w + key_gap),
+                row3_y,
+                letter_w,
+                row_h,
+            )
+
+            key_rects.append((base, r))
+
+            draw_button(
+                surface,
+                r,
+                keyboard_char_for(base),
+                bg=BLUE_BG,
+                fg=TEXT,
+                radius=7,
+                hovered=r.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+
+    # Store rectangles for mouse handling
     _results_keyboard_rects["panel"] = kb_rect
     _results_keyboard_rects["keys"] = key_rects
     _results_keyboard_rects["controls"] = controls
+
     return kb_rect.top
 
 
@@ -1111,6 +1281,9 @@ if use_ascii:
         "~": "~",
         "[OK]": "[OK]",
         "X": "X",
+        "kb": "kb",
+        "<>": "<>",
+        "?": "?",
     }
 else:
     special_chars = {
@@ -1123,6 +1296,9 @@ else:
         "~": "≈",
         "[OK]": "✓",
         "X": "✕",
+        "kb": "⌨",
+        "<>": "⇄",
+        "?": "?",
     }
 
 pygame.init()
@@ -1310,9 +1486,6 @@ RESULTS_TOP_Y = WORKSPACE_Y + PAD + 170
 
 # How many pattern slots per mode
 MAX_PATTERN_SLOTS = 10
-
-# X position for +/- buttons in Pattern Hunt (fixed at left of slot area)
-_PH_PM_X = PAD + LEFT_LABEL_W - 22  # just before slots start
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -2256,7 +2429,7 @@ class ProgressModal:
                 surface,
                 close_btn,
                 "Close",
-                ACCENT,
+                RED,
                 WHITE,
                 radius=7,
                 hovered=close_btn.collidepoint(mouse_pos),
@@ -2277,7 +2450,7 @@ class ProgressModal:
                 surface,
                 close_btn,
                 "Close",
-                ACCENT,
+                RED,
                 WHITE,
                 radius=7,
                 hovered=close_btn.collidepoint(mouse_pos),
@@ -2288,7 +2461,7 @@ class ProgressModal:
                 surface,
                 action_btn,
                 "Stop",
-                RED,
+                ORANGE,
                 WHITE,
                 radius=7,
                 hovered=action_btn.collidepoint(mouse_pos),
@@ -2298,7 +2471,7 @@ class ProgressModal:
                 surface,
                 close_btn,
                 "Close",
-                ACCENT,
+                RED,
                 WHITE,
                 radius=7,
                 hovered=close_btn.collidepoint(mouse_pos),
@@ -3635,7 +3808,7 @@ class ShowStatisticsModal:
                     continue
                 vc = sum(1 for ch in letters_w if _is_vowel(ch, self.language))
                 ratios.append(vc / len(letters_w))
-            buckets = [(0.0, 0.1), (0.1, 0.2), (0.2, 0.3), (0.3, 0.4), (0.4, 0.5), (0.5, 0.6), (0.6, 0.7), (0.7, 0.8), (0.8, 0.9), (0.9, 1.0)]
+            buckets = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
             labels = [_bucket_label(a, b) for a, b in buckets]
             data = []
             for a, b in buckets:
@@ -5598,7 +5771,7 @@ def render_controls(mouse_pos):
     draw_button(
         screen,
         search_rect,
-        "Search",
+        f"Search",
         GREEN,
         WHITE,
         hovered=search_rect.collidepoint(mouse_pos),
@@ -5665,7 +5838,7 @@ def render_file_row(mouse_pos):
         return br, path_rect
 
     # ── Column widths for equal spacing across the whole row ──
-    action_col_w = 180
+    action_col_w = 150
     theme_w = 100
     save_w = 130
     col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
@@ -5718,13 +5891,13 @@ def render_file_row(mouse_pos):
         meaning_x, chk_y, state.show_meaning, "Show Meaning"
     )
 
-    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w, action_btn_h)
-    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w, action_btn_h)
+    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w + 10, action_btn_h)
+    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w - 10, action_btn_h)
 
     draw_button(
         screen,
         translate_btn,
-        "Translation",
+        f"Translation {special_chars['<>']}",
         PURPLE,
         WHITE,
         radius=7,
@@ -5734,7 +5907,7 @@ def render_file_row(mouse_pos):
     draw_button(
         screen,
         meaning_btn,
-        "Meaning",
+        f"Meaning {special_chars['?']}",
         PURPLE,
         WHITE,
         radius=7,
@@ -6258,7 +6431,7 @@ def render_workspace_ph(mouse_pos):
                 screen.blit(e_img, e_img.get_rect(center=exp_btn.center))
 
                 if sr.collidepoint(mouse_pos):
-                    hover_text = f"{row_lbl} / {col_labels[ci]}: {disp_seq or '-'}" + (
+                    hover_text = f"{row_lbl} / {col_labels[ci]}: {disp_seq or f'{special_chars["-"]}'}" + (
                         " [expanded]" if expanded else ""
                     )
                     hover_pos = mouse_pos
@@ -6289,7 +6462,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     _result_word_rects = []
 
     y0 = table_bottom_y + PAD
-    h = HEIGHT - y0 - PAD
+    h = HEIGHT - y0 - PAD / 2
     if h < 80:
         return None, None
 
@@ -6369,8 +6542,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
     legend_items = [
         ("ok", "ok"),
-        ("no_translation", "no translation"),
-        ("no_meaning", "no meaning"),
+        ("no_translation", f"no {special_chars['<>']}"),
+        ("no_meaning", f"no {special_chars['?']}"),
         ("no_translation_no_meaning", "none"),
     ]
 
@@ -6445,7 +6618,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     show_words_rect = pygame.Rect(panel.x + PAD, legend_y - 11, 118, 22)
     show_stats_rect = pygame.Rect(show_words_rect.right + 8, legend_y - 11, 138, 22)
 
-    keyboard_rect = pygame.Rect(panel.centerx - 66, legend_y - 11, 132, 22)
+    keyboard_rect = pygame.Rect(panel.centerx - 40, legend_y - 11, 80, 22)
     _results_action_rects["keyboard"] = keyboard_rect
     _results_action_rects["show_words"] = show_words_rect
     _results_action_rects["show_stats"] = show_stats_rect
@@ -6453,7 +6626,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     draw_button(
         screen,
         keyboard_rect,
-        "keyboard on" if state.keyboard_on else "keyboard off",
+        f"{special_chars['kb']} on" if state.keyboard_on else f"{special_chars['kb']} off",
         bg=ORANGE if state.keyboard_on else BROWN,
         fg=WHITE,
         radius=8,
