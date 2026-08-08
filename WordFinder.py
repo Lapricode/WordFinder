@@ -7,7 +7,7 @@ from statistics import mean, median, pstdev
 import threading
 import queue
 import pygame
-from tkinter import Tk, filedialog, Toplevel, Text, Button, END, TclError
+from tkinter import Tk, filedialog
 from collections import Counter
 import subprocess
 from itertools import product
@@ -208,8 +208,8 @@ def _pat_matches_end(word, pat_info, language):
         return word.endswith(seq)
 
 
-def _pat_matches_middle(word, pat_info, language):
-    """Return True if pat_info appears anywhere in word."""
+def _pat_matches_inner(word, pat_info, language):
+    """Return True if pat_info appears anywhere in the whole word."""
     seq = pat_info["seq"]
     expanded = pat_info["expanded"]
     if not seq:
@@ -240,7 +240,9 @@ def _pat_matches_middle(word, pat_info, language):
     return False
 
 
-def _pat_matches_inner(word, pat_info, language):
+def _pat_matches_middle(word, pat_info, language):
+    """Return True if pat_info matches strictly inside word, excluding the
+    first and last letters."""
     seq = pat_info["seq"]
     expanded = pat_info["expanded"]
 
@@ -279,6 +281,16 @@ def _pat_matches_inner(word, pat_info, language):
         return False
 
     return seq in interior
+
+
+def _pat_matches_row(word, pat_info, row_name, language):
+    if row_name == "start":
+        return _pat_matches_start(word, pat_info, language)
+    if row_name == "inner":
+        return _pat_matches_inner(word, pat_info, language)
+    if row_name == "middle":
+        return _pat_matches_middle(word, pat_info, language)
+    return _pat_matches_end(word, pat_info, language)
 
 
 def expand_sequence(seq, language):
@@ -532,13 +544,22 @@ def find_pattern_words_grid(
                 if p["seq"]
             ]
 
+            # ABSENT constraints: every pattern in the cell must be absent
+            # from the row-specific region of the word.
+            for pat in absent_pats:
+                if _pat_matches_row(word, pat, row, language):
+                    ok = False
+                    break
+            if not ok:
+                break
+
             # EXIST constraints
             if row == "start":
                 if not _check_start_exist(word, exist_pats):
                     ok = False
                     break
 
-            elif row == "middle":
+            elif row == "inner":
                 if not _check_inner_exist(word, exist_pats):
                     ok = False
                     break
@@ -1531,6 +1552,15 @@ def draw_panel(surface, rect, color=None, border_color=None, radius=12):
 
 def lighten(color, amount=35):
     return tuple(min(255, c + amount) for c in color[:3])
+
+
+def _dim_color(color, toward=None, factor=0.45):
+    """Blends `color` toward a muted/background tone, used to de-emphasize
+    non-hovered chart bars relative to the hovered one."""
+    target = toward if toward is not None else PANEL2
+    return tuple(
+        int(c + (t - c) * factor) for c, t in zip(color[:3], target[:3])
+    )
 
 
 def draw_button(
@@ -3321,6 +3351,10 @@ class EnrichmentModal:
             tip_rect.right = W - PAD
         if tip_rect.bottom > H - PAD:
             tip_rect.bottom = H - PAD
+        if tip_rect.left < PAD:
+            tip_rect.left = PAD
+        if tip_rect.top < PAD:
+            tip_rect.top = PAD
 
         pygame.draw.rect(surface, PANEL, tip_rect, border_radius=10)
         pygame.draw.rect(surface, ACCENT, tip_rect, 2, border_radius=10)
@@ -3348,6 +3382,10 @@ class EnrichmentModal:
 
 
 class ShowWordsModal:
+    ROW_H = 40
+    ROW_GAP = 5
+    ROW_STRIDE = ROW_H + ROW_GAP
+
     def __init__(self):
         self.visible = False
         self.words = []
@@ -3364,8 +3402,10 @@ class ShowWordsModal:
         self._rects = {}
         self._picker_dragging = False
         self._picker_drag_offset = 0
+        self.title = "Show Words"
+        self.narrow = False
 
-    def show(self, words, language):
+    def show(self, words, language, title="Show Words", narrow=False):
         self.visible = True
         self.words = list(words or [])
         self.language = language
@@ -3375,6 +3415,8 @@ class ShowWordsModal:
         self._picker_kind = None
         self._picker_open = False
         self._picker_scroll = 0
+        self.title = title
+        self.narrow = narrow
 
     def hide(self):
         self.visible = False
@@ -3382,7 +3424,7 @@ class ShowWordsModal:
         self._picker_kind = None
 
     def _panel_rect(self, W, H):
-        pw = min(780, W - 80)
+        pw = min(520 if self.narrow else 780, W - 80)
         ph = min(640, H - 60)
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
 
@@ -3421,7 +3463,9 @@ class ShowWordsModal:
     def _content_height(self, panel):
         list_top = panel.y + 128
         list_bottom = panel.bottom - 54
-        return max(0, len(self._filtered_words()) * 28 - (list_bottom - list_top))
+        return max(
+            0, len(self._filtered_words()) * self.ROW_STRIDE - (list_bottom - list_top)
+        )
 
     @property
     def _max_scroll(self):
@@ -3429,7 +3473,7 @@ class ShowWordsModal:
 
     def _scrollbar_rects(self, panel):
         visible_h = panel.height - 182
-        total_h = len(self._filtered_words()) * 28
+        total_h = len(self._filtered_words()) * self.ROW_STRIDE
         self._max_scroll_cache = max(0, total_h - visible_h)
         if total_h <= visible_h:
             return None, None
@@ -3488,51 +3532,20 @@ class ShowWordsModal:
                 picker = self._rects.get("picker")
                 if picker:
                     options = self._rects.get("picker_options", [])
-                    visible = max(1, (picker.height - 16) // (28 + 4))
-                    track, thumb = self._picker_scrollbar_rects(
-                        picker, len(options), visible
-                    )
+                    if picker.collidepoint(event.pos):
+                        for idx, opt, r in options:
+                            if r.collidepoint(event.pos):
+                                if self._picker_kind == "letter":
+                                    self.letter_filter = opt
+                                else:
+                                    self.length_filter = opt
+                                self._scroll = 0
+                                self._picker_open = False
+                                self._picker_kind = None
+                                return True
+                self._picker_open = False
+                return True
 
-                    if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
-                        if thumb and thumb.collidepoint(event.pos):
-                            self._picker_dragging = True
-                            self._picker_drag_offset = event.pos[1] - thumb.y
-                            return True
-
-                        if picker.collidepoint(event.pos):
-                            for idx, opt, r in options:
-                                if r.collidepoint(event.pos):
-                                    if self._picker_kind == "letter":
-                                        self.letter_filter = opt
-                                    else:
-                                        self.length_filter = opt
-                                    self._scroll = 0
-                                    self._picker_open = False
-                                    self._picker_kind = None
-                                    return True
-
-                    if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
-                        self._picker_dragging = False
-
-                    if event.type == pygame.MOUSEMOTION and self._picker_dragging and track:
-                        max_scroll = max(0, len(options) - visible)
-                        new_y = event.pos[1] - self._picker_drag_offset
-                        max_thumb_y = track.y + track.height - thumb.height
-                        ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
-                        self._picker_scroll = clamp(
-                            int(round(ratio * max_scroll)), 0, max_scroll
-                        )
-
-                    if event.type == pygame.MOUSEWHEEL and picker.collidepoint(
-                        pygame.mouse.get_pos()
-                    ):
-                        self._picker_scroll = clamp(
-                            self._picker_scroll - event.y,
-                            0,
-                            max(0, len(options) - visible),
-                        )
-                        return True
-            
             if letter_selector and letter_selector.collidepoint(event.pos):
                 self._picker_kind = "letter"
                 self._picker_open = True
@@ -3558,22 +3571,29 @@ class ShowWordsModal:
             ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
             self._scroll = max(0, min(self._max_scroll, ratio * self._max_scroll))
 
-        if event.type == pygame.MOUSEWHEEL:
-            if self._picker_open:
-                picker = self._rects.get("picker")
-                if picker and picker.collidepoint(pygame.mouse.get_pos()):
-                    options = self._rects.get("picker_options", [])
-                    visible = max(1, (picker.height - 16) // (28 + 4))
-                    self._picker_scroll = clamp(
-                        self._picker_scroll - event.y,
-                        0,
-                        max(0, len(options) - visible),
-                    )
-                    return True
+        if event.type in (pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+            wheel_y = 0
+            if event.type == pygame.MOUSEWHEEL:
+                wheel_y = event.y
+            elif event.button in (4, 5):
+                wheel_y = 1 if event.button == 4 else -1
 
-            if panel.collidepoint(pygame.mouse.get_pos()):
-                self._scroll = clamp(self._scroll - event.y * 20, 0, self._max_scroll)
-                return True
+            if wheel_y:
+                if self._picker_open:
+                    picker = self._rects.get("picker")
+                    if picker and picker.collidepoint(pygame.mouse.get_pos()):
+                        options = self._rects.get("picker_options", [])
+                        visible = max(1, (picker.height - 16) // (28 + 4))
+                        self._picker_scroll = clamp(
+                            self._picker_scroll - wheel_y,
+                            0,
+                            max(0, len(options) - visible),
+                        )
+                        return True
+
+                if panel.collidepoint(pygame.mouse.get_pos()):
+                    self._scroll = clamp(self._scroll - wheel_y * 20, 0, self._max_scroll)
+                    return True
 
         return True
 
@@ -3588,7 +3608,7 @@ class ShowWordsModal:
         panel = self._panel_rect(W, H)
         draw_panel(surface, panel, PANEL, BORDER, radius=16)
 
-        blit_text(surface, "Show Words", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+        blit_text(surface, self.title, FONT_LG, TEXT, panel.x + 24, panel.y + 18)
         blit_text(
             surface,
             f"{len(self._filtered_words())} word(s)",
@@ -3606,46 +3626,201 @@ class ShowWordsModal:
         self._rects["length_selector"] = length_selector
 
         draw_button(
-            surface, letter_selector, f"Start: {self.letter_filter}",
-            bg=BLUE_BG, fg=TEXT, hovered=letter_selector.collidepoint(mouse_pos), font=FONT_SM
+            surface,
+            letter_selector,
+            f"Start: {self.letter_filter}",
+            bg=BLUE_BG,
+            fg=TEXT,
+            hovered=letter_selector.collidepoint(mouse_pos),
+            font=FONT_SM,
         )
         draw_button(
-            surface, length_selector, f"Length: {self.length_filter}",
-            bg=BLUE_BG, fg=TEXT, hovered=length_selector.collidepoint(mouse_pos), font=FONT_SM
+            surface,
+            length_selector,
+            f"Length: {self.length_filter}",
+            bg=BLUE_BG,
+            fg=TEXT,
+            hovered=length_selector.collidepoint(mouse_pos),
+            font=FONT_SM,
         )
 
         list_top = panel.y + 128
         list_bottom = panel.bottom - 54
         visible_words = self._filtered_words()
-        line_h = 28
-        start = clamp(self._scroll, 0, max(0, len(visible_words) * line_h - (list_bottom - list_top)))
-        first_row = int(start // line_h)
-        y_off = start % line_h
+        line_h = self.ROW_H
+        row_stride = self.ROW_STRIDE
+
+        start = clamp(
+            self._scroll,
+            0,
+            max(0, len(visible_words) * row_stride - (list_bottom - list_top)),
+        )
+        first_row = int(start // row_stride)
+        y_off = start % row_stride
 
         clip = pygame.Rect(panel.x + 20, list_top, panel.width - 40, list_bottom - list_top)
         old_clip = surface.get_clip()
         surface.set_clip(clip)
 
+        hovered_word = None
+
+        # Stable left-column width based on rendered pixel width, not character count.
+        available_row_w = panel.width - 56
+        widest_word_w = max((FONT_SM.size(w)[0] for w in visible_words), default=0)
+        word_col_w = min(int(available_row_w * 0.45), max(120, widest_word_w + 18))
+        word_col_w = min(word_col_w, max(90, available_row_w - 80))
+
+        col_gap = 12
+        content_pad = 8
+
         y = list_top - y_off
         for word in visible_words[first_row:]:
             if y > list_bottom:
                 break
-            row = pygame.Rect(panel.x + 24, y, panel.width - 56, 24)
-            pygame.draw.rect(surface, PANEL2, row, border_radius=6)
-            pygame.draw.rect(surface, BORDER, row, 1, border_radius=6)
+
+            row = pygame.Rect(panel.x + 24, y, panel.width - 56, line_h)
+            is_hovered = row.collidepoint(mouse_pos) and clip.collidepoint(mouse_pos)
+
+            status = get_word_status(word, self.language)
+            if state.colorize_status:
+                bg_color, bdr_color = status_colors(status)
+            else:
+                bg_color, bdr_color = PANEL2, BORDER
+
+            draw_r = row.inflate(int(row.w * 0.015), int(row.h * 0.12)) if is_hovered else row
+            if is_hovered:
+                bg_color = lighten(bg_color, 10)
+                bdr_color = lighten(bdr_color, 10)
+                hovered_word = word
+
+            pygame.draw.rect(surface, bg_color, draw_r, border_radius=6)
+            pygame.draw.rect(surface, bdr_color, draw_r, 1, border_radius=6)
+
+            translation = get_word_translation(word, self.language)
+            definition = get_word_first_definition(word, self.language)
+
+            left_rect = pygame.Rect(
+                draw_r.x + content_pad,
+                draw_r.y,
+                word_col_w,
+                draw_r.h,
+            )
+            right_x = left_rect.right + col_gap
+            right_rect = pygame.Rect(
+                right_x,
+                draw_r.y,
+                draw_r.right - right_x - content_pad,
+                draw_r.h,
+            )
+
+            # Left column: word
             blit_text(
                 surface,
-                fit_text_with_ellipsis(word, FONT_SM, row.width - 16),
+                word,
                 FONT_SM,
                 TEXT,
-                row.x + 8,
-                row.centery,
+                left_rect.x,
+                left_rect.centery,
                 anchor="midleft",
             )
-            y += line_h
+
+            # Right column: translation and definition stacked vertically
+            detail_lines = []
+            if translation:
+                detail_lines.append((f"{special_chars['>']} {translation}", ACCENT))
+            if definition:
+                detail_lines.append((definition, MUTED))
+
+            if detail_lines and right_rect.w > 20:
+                detail_font = FONT_SM
+                line_gap = 2
+
+                rendered = []
+                total_h = 0
+                for txt, color in detail_lines:
+                    fitted = fit_text_with_ellipsis(txt, detail_font, right_rect.w)
+                    rendered.append((fitted, color))
+                    total_h += detail_font.size(fitted)[1]
+                total_h += line_gap * (len(rendered) - 1)
+
+                cy = draw_r.centery - total_h // 2
+                for txt, color in rendered:
+                    th = detail_font.size(txt)[1]
+                    blit_text(
+                        surface,
+                        txt,
+                        detail_font,
+                        color,
+                        right_rect.x,
+                        cy + th // 2,
+                        anchor="midleft",
+                    )
+                    cy += th + line_gap
+
+            y += row_stride
 
         surface.set_clip(old_clip)
 
+        track, thumb = self._scrollbar_rects(panel)
+        if track:
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
+
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
+        self._rects["close"] = close_btn
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=RED,
+            fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        if hovered_word is not None:
+            lines = [(hovered_word, FONT_MD, TEXT)]
+            translation = get_word_translation(hovered_word, self.language)
+            if translation:
+                lines.append((f"{hovered_word} {special_chars['>']} {translation}", FONT_SM, ACCENT))
+            definition = get_word_first_definition(hovered_word, self.language)
+            if definition:
+                lines.append((definition, FONT_SM, MUTED))
+
+            if len(lines) > 1:
+                pad = 10
+                max_w = 0
+                total_h = 0
+                gap = 3
+                wrapped_lines = []
+                for text, font, color in lines:
+                    for wline in self._wrap_tooltip(text, font, 380):
+                        wrapped_lines.append((wline, font, color))
+                        w, h = font.size(wline)
+                        max_w = max(max_w, w)
+                        total_h += h + gap
+
+                tip_w = min(max_w + pad * 2, W - 2 * PAD)
+                tip_h = total_h + pad * 2
+                tip_rect = pygame.Rect(mouse_pos[0] + 20, mouse_pos[1] + 10, tip_w, tip_h)
+                if tip_rect.right > W - PAD:
+                    tip_rect.right = W - PAD
+                if tip_rect.bottom > H - PAD:
+                    tip_rect.bottom = H - PAD
+                if tip_rect.left < PAD:
+                    tip_rect.left = PAD
+                if tip_rect.top < PAD:
+                    tip_rect.top = PAD
+
+                pygame.draw.rect(surface, PANEL, tip_rect, border_radius=10)
+                pygame.draw.rect(surface, ACCENT, tip_rect, 2, border_radius=10)
+
+                ly = tip_rect.y + pad
+                for text, font, color in wrapped_lines:
+                    surface.blit(font.render(text, True, color), (tip_rect.x + pad, ly))
+                    ly += font.size(text)[1] + gap
+
+        # Draw the picker last so it stays above the rest of the modal.
         self._rects["picker"] = None
         self._rects["picker_options"] = []
 
@@ -3657,11 +3832,6 @@ class ShowWordsModal:
             self._rects["picker_options"] = option_rects
 
             draw_panel(surface, picker, PANEL2, BORDER, radius=12)
-
-            visible = max(1, (picker.height - 16) // (28 + 4))
-            track, thumb = self._picker_scrollbar_rects(
-                picker, len(options), visible
-            )
 
             for idx, opt, r in option_rects:
                 selected = (
@@ -3687,22 +3857,23 @@ class ShowWordsModal:
                     anchor="midleft",
                 )
 
-            if track:
-                pygame.draw.rect(surface, PANEL2, track, border_radius=4)
-                pygame.draw.rect(surface, BORDER, track, 1, border_radius=4)
-                pygame.draw.rect(surface, ACCENT, thumb, border_radius=4)
-        
-        track, thumb = self._scrollbar_rects(panel)
-        if track:
-            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
-            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
-
-        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
-        self._rects["close"] = close_btn
-        draw_button(
-            surface, close_btn, "Close", bg=RED, fg=WHITE,
-            hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM
-        )
+    @staticmethod
+    def _wrap_tooltip(text, font, max_w):
+        if not text:
+            return [""]
+        words = text.split()
+        lines, current = [], ""
+        for word in words:
+            test = (current + " " + word).strip()
+            if font.size(test)[0] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = word
+        if current:
+            lines.append(current)
+        return lines or [""]
 
 
 class ShowStatisticsModal:
@@ -3714,8 +3885,8 @@ class ShowStatisticsModal:
         ("unique", "Unique"),
         ("first_letter", "1st Letter"),
         ("last_letter", "Last Letter"),
-        ("bigrams", "Bigrams"),
-        ("syllables", "Syllables"),
+        ("ngrams", "Ngrams"),
+        # ("syllables", "Syllables"),
     ]
 
     def __init__(self):
@@ -3726,7 +3897,7 @@ class ShowStatisticsModal:
         self.chart_orientation = "vertical"  # "vertical" | "horizontal"
         self.pos_index = 0
         self.ngram_size = 2
-        self.top_n = 15
+        self.top_n = 25
         self._picker_open = False
         self._picker_scroll = 0
         self._rects = {}
@@ -3744,7 +3915,7 @@ class ShowStatisticsModal:
         self.chart_orientation = "vertical"
         self.pos_index = 0
         self.ngram_size = 2
-        self.top_n = 15
+        self.top_n = 25
         self._picker_open = False
         self._picker_scroll = 0
         self.sort_order = "normal"
@@ -3849,7 +4020,7 @@ class ShowStatisticsModal:
             summary = _stats_summary(data)
             return letters, data, summary, "Ending-letter frequency"
 
-        if self.stat_key == "bigrams":
+        if self.stat_key == "ngrams":
             n = self.ngram_size
             pairs = _top_ngrams(words, self.language, n=n, top_n=self.top_n)
             labels = [k.upper() for k, _ in pairs]
@@ -3866,14 +4037,91 @@ class ShowStatisticsModal:
         summary = _stats_summary(vals)
         return labels, data, summary, "Estimated syllables per word"
 
+    def _words_for_label(self, label):
+        """Returns the list of words belonging to the given bar's label,
+        for the given stat_key. Mirrors the bucketing logic in _compute."""
+        words = self.words
+
+        if self.stat_key == "length":
+            n = int(label)
+            return [w for w in words if len(w) == n]
+
+        if self.stat_key == "letters":
+            return [w for w in words if label in _word_letters(w, self.language)]
+
+        if self.stat_key == "pos_letters":
+            out = []
+            for w in words:
+                if len(w) > self.pos_index:
+                    ch = _base_letter(w[self.pos_index], self.language)
+                    if ch == label:
+                        out.append(w)
+            return out
+
+        if self.stat_key == "vowels":
+            buckets = [(0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0)]
+            bucket_labels = [_bucket_label(a, b) for a, b in buckets]
+            try:
+                bi = bucket_labels.index(label)
+            except ValueError:
+                return []
+            a, b = buckets[bi]
+            out = []
+            for w in words:
+                letters_w = _word_letters(w, self.language)
+                if not letters_w:
+                    continue
+                r = sum(1 for ch in letters_w if _is_vowel(ch, self.language)) / len(letters_w)
+                if b < 1.0:
+                    if a <= r < b:
+                        out.append(w)
+                else:
+                    if a <= r <= b:
+                        out.append(w)
+            return out
+
+        if self.stat_key == "unique":
+            n = int(label)
+            return [w for w in words if w and len(set(_word_letters(w, self.language))) == n]
+
+        if self.stat_key == "first_letter":
+            return [w for w in words if w and _base_letter(w[0], self.language) == label]
+
+        if self.stat_key == "last_letter":
+            return [w for w in words if w and _base_letter(w[-1], self.language) == label]
+
+        if self.stat_key == "ngrams":
+            n = self.ngram_size
+            target = label.lower()
+            out = []
+            for w in words:
+                letters_w = _word_letters(w, self.language)
+                found = False
+                for i in range(len(letters_w) - n + 1):
+                    if "".join(letters_w[i : i + n]).lower() == target:
+                        found = True
+                        break
+                if found:
+                    out.append(w)
+            return out
+
+        # syllables
+        n = int(label)
+        return [w for w in words if w and _estimate_syllables(w, self.language) == n]
+
     def _draw_graph(self, surface, area, labels, values, mouse_pos):
+        """Draws the bar graph, always showing each bar's value, dimming
+        non-hovered bars when one is hovered, and returns a list of
+        (label, value, bar_rect) tuples for click handling."""
         if not labels:
             blit_text(surface, "No data", FONT_MD, MUTED, area.centerx, area.centery, anchor="center")
-            return
+            return []
 
         max_v = max(values) if values else 1
         if max_v <= 0:
             max_v = 1
+
+        bar_rects = []
 
         if self.chart_orientation == "vertical":
             inner = area.inflate(-20, -32)
@@ -3882,29 +4130,84 @@ class ShowStatisticsModal:
             gap = max(4, (inner.width - bar_w * len(labels)) // max(1, len(labels) - 1))
             x = inner.left
             label_font = FONT_SM
+
+            # First pass: compute all bar rects so we know which is hovered
+            # before drawing (needed for the dim/highlight effect).
+            prelim = []
+            xx = inner.left
             for lbl, val in zip(labels, values):
                 h = int((inner.height - 40) * (val / max_v))
-                bar = pygame.Rect(x, base_y - h, bar_w, h)
-                pygame.draw.rect(surface, ACCENT, bar, border_radius=6)
-                pygame.draw.rect(surface, BORDER, bar, 1, border_radius=6)
-                if bar.collidepoint(mouse_pos):
-                    blit_text(surface, f"{lbl}: {val}", FONT_SM, TEXT, bar.centerx, bar.y - 8, anchor="midbottom")
-                blit_text(surface, fit_text_with_ellipsis(lbl, label_font, bar_w + 4), label_font, TEXT, bar.centerx, base_y + 6, anchor="midtop")
-                x += bar_w + gap
+                bar = pygame.Rect(xx, base_y - h, bar_w, h)
+                prelim.append((lbl, val, bar))
+                xx += bar_w + gap
+            hovered_idx = next(
+                (i for i, (_, _, b) in enumerate(prelim) if b.collidepoint(mouse_pos)), None
+            )
+
+            for i, (lbl, val, bar) in enumerate(prelim):
+                is_hover = i == hovered_idx
+                if hovered_idx is None:
+                    fill, border = ACCENT, BORDER
+                elif is_hover:
+                    fill, border = lighten(ACCENT, 25), TEXT
+                else:
+                    fill, border = _dim_color(ACCENT), _dim_color(BORDER)
+
+                draw_bar = bar.inflate(2, 2) if is_hover else bar
+                pygame.draw.rect(surface, fill, draw_bar, border_radius=6)
+                pygame.draw.rect(surface, border, draw_bar, 1, border_radius=6)
+
+                val_color = TEXT if (hovered_idx is None or is_hover) else MUTED
+                blit_text(
+                    surface, str(val), FONT_SM, val_color,
+                    bar.centerx, bar.y - 4, anchor="midbottom",
+                )
+                lbl_color = TEXT if (hovered_idx is None or is_hover) else MUTED
+                blit_text(
+                    surface,
+                    fit_text_with_ellipsis(lbl, label_font, bar_w + 4),
+                    label_font, lbl_color, bar.centerx, base_y + 6, anchor="midtop",
+                )
+                bar_rects.append((lbl, val, bar))
         else:
             inner = area.inflate(-20, -20)
             row_h = max(22, inner.height // max(1, len(labels)))
             y = inner.top
+
+            prelim = []
+            yy = inner.top
             for lbl, val in zip(labels, values):
-                bar_w = int((inner.width - 120) * (val / max_v))
-                row = pygame.Rect(inner.left, y, inner.width, row_h - 4)
-                bar = pygame.Rect(inner.left + 110, y + 2, bar_w, max(8, row_h - 8))
-                blit_text(surface, fit_text_with_ellipsis(lbl, FONT_SM, 100), FONT_SM, TEXT, row.x, row.centery, anchor="midleft")
-                pygame.draw.rect(surface, ACCENT, bar, border_radius=6)
-                pygame.draw.rect(surface, BORDER, bar, 1, border_radius=6)
-                if bar.collidepoint(mouse_pos):
-                    blit_text(surface, str(val), FONT_SM, TEXT, bar.right + 8, bar.centery, anchor="midleft")
+                bar_w = int((inner.width - 150) * (val / max_v))
+                row = pygame.Rect(inner.left, yy, inner.width, row_h - 4)
+                bar = pygame.Rect(inner.left + 110, yy + 2, bar_w, max(8, row_h - 8))
+                prelim.append((lbl, val, row, bar))
+                yy += row_h
+            hovered_idx = next(
+                (i for i, (_, _, _, b) in enumerate(prelim) if b.collidepoint(mouse_pos)), None
+            )
+
+            for i, (lbl, val, row, bar) in enumerate(prelim):
+                is_hover = i == hovered_idx
+                if hovered_idx is None:
+                    fill, border = ACCENT, BORDER
+                elif is_hover:
+                    fill, border = lighten(ACCENT, 25), TEXT
+                else:
+                    fill, border = _dim_color(ACCENT), _dim_color(BORDER)
+
+                lbl_color = TEXT if (hovered_idx is None or is_hover) else MUTED
+                blit_text(surface, fit_text_with_ellipsis(lbl, FONT_SM, 100), FONT_SM, lbl_color, row.x, row.centery, anchor="midleft")
+
+                draw_bar = bar.inflate(2, 2) if is_hover else bar
+                pygame.draw.rect(surface, fill, draw_bar, border_radius=6)
+                pygame.draw.rect(surface, border, draw_bar, 1, border_radius=6)
+
+                val_color = TEXT if (hovered_idx is None or is_hover) else MUTED
+                blit_text(surface, str(val), FONT_SM, val_color, bar.right + 8, bar.centery, anchor="midleft")
+                bar_rects.append((lbl, val, bar))
                 y += row_h
+
+        return bar_rects
 
     def handle_event(self, event, W, H):
         if not self.visible:
@@ -3971,14 +4274,56 @@ class ShowStatisticsModal:
                 self.pos_index = (self.pos_index + 1) % max_pos
                 return True
 
-            if self.stat_key == "bigrams" and self._rects.get("ngram_toggle") and self._rects["ngram_toggle"].collidepoint(event.pos):
+            if self.stat_key == "ngrams" and self._rects.get("ngram_toggle") and self._rects["ngram_toggle"].collidepoint(event.pos):
                 self.ngram_size = 3 if self.ngram_size == 2 else 2
                 return True
-            
+
+            for lbl, val, bar in self._rects.get("bar_rects", []):
+                if bar.collidepoint(event.pos):
+                    words_for_bar = self._words_for_label(lbl)
+                    stat_label = dict(self.STAT_ITEMS).get(self.stat_key, "")
+                    words_modal.show(
+                        words_for_bar,
+                        self.language,
+                        title=f"{stat_label}: {lbl}",
+                        narrow=True,
+                    )
+                    return True
+
             close_btn = self._rects.get("close")
             if close_btn and close_btn.collidepoint(event.pos):
                 self.hide()
                 return True
+
+        if event.type in (pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+            mp = pygame.mouse.get_pos()
+            wheel_y = 0
+            if event.type == pygame.MOUSEWHEEL:
+                wheel_y = event.y
+            elif event.button in (4, 5):
+                wheel_y = 1 if event.button == 4 else -1
+            if wheel_y:
+                if self._picker_open:
+                    picker = self._rects.get("picker")
+                    if picker and picker.collidepoint(mp):
+                        row_h, gap = 28, 4
+                        visible = max(1, (picker.height - 16) // (row_h + gap))
+                        self._picker_scroll = clamp(
+                            self._picker_scroll - wheel_y, 0,
+                            max(0, len(self.STAT_ITEMS) - visible),
+                        )
+                        return True
+                if self._sort_picker_open:
+                    picker = self._rects.get("sort_picker")
+                    if picker and picker.collidepoint(mp):
+                        sort_items_len = 3
+                        row_h, gap = 28, 4
+                        visible = max(1, (picker.height - 16) // (row_h + gap))
+                        self._sort_picker_scroll = clamp(
+                            self._sort_picker_scroll - wheel_y, 0,
+                            max(0, sort_items_len - visible),
+                        )
+                        return True
 
         return True
 
@@ -3993,11 +4338,15 @@ class ShowStatisticsModal:
         panel = self._panel_rect(W, H)
         draw_panel(surface, panel, PANEL, BORDER, radius=16)
 
-        blit_text(surface, "Show Statistics", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
+        title_rect = blit_text(surface, "Show Statistics", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
 
-        stat_selector = pygame.Rect(panel.x + 24, panel.y + 60, 180, 30)
-        orient_btn = pygame.Rect(panel.right - 180, panel.y + 20, 150, 30)
-        sort_btn = pygame.Rect(panel.right - 180, panel.y + 60, 150, 30)
+        orient_btn_w = 120
+        sort_btn_w = 120
+        controls_y = panel.y + 18 + max(0, (title_rect.height - 30) // 2)
+
+        stat_selector = pygame.Rect(title_rect.right + 18, controls_y, 160, 30)
+        orient_btn = pygame.Rect(panel.right - orient_btn_w - 10, controls_y, orient_btn_w, 30)
+        sort_btn = pygame.Rect(orient_btn.left - sort_btn_w - 10, controls_y, sort_btn_w, 30)
 
         self._rects["stat_selector"] = stat_selector
         self._rects["orient_btn"] = orient_btn
@@ -4034,13 +4383,122 @@ class ShowStatisticsModal:
             font=FONT_SM,
         )
 
+        if self.stat_key == "pos_letters":
+            max_pos = max(1, max((len(w) for w in self.words), default=1))
+            extra_btn = pygame.Rect(stat_selector.right + 10, controls_y, 160, 30)
+            self._rects["pos_selector"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                f"Position: {self.pos_index + 1}/{max_pos}",
+                bg=BLUE_BG,
+                fg=TEXT,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+        elif self.stat_key == "ngrams":
+            extra_btn = pygame.Rect(stat_selector.right + 10, controls_y, 90, 30)
+            self._rects["ngram_toggle"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                "Bi" if self.ngram_size == 2 else "Tri",
+                bg=BLUE_BG,
+                fg=WHITE,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+        else:
+            self._rects["pos_selector"] = None
+            self._rects["ngram_toggle"] = None
+
+        self._rects["picker"] = None
+        self._rects["picker_items"] = []
+        self._rects["sort_picker"] = None
+        self._rects["sort_picker_items"] = []
+        
+        if self.stat_key == "pos_letters":
+            max_pos = max(1, max((len(w) for w in self.words), default=1))
+            extra_btn = pygame.Rect(stat_selector.right + 10, controls_y, 160, 30)
+            self._rects["pos_selector"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                f"Position: {self.pos_index + 1}/{max_pos}",
+                bg=BLUE_BG,
+                fg=TEXT,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+        elif self.stat_key == "ngrams":
+            extra_btn = pygame.Rect(stat_selector.right + 10, controls_y, 90, 30)
+            self._rects["ngram_toggle"] = extra_btn
+            draw_button(
+                surface,
+                extra_btn,
+                "Bi" if self.ngram_size == 2 else "Tri",
+                bg=BLUE_BG,
+                fg=WHITE,
+                hovered=extra_btn.collidepoint(mouse_pos),
+                font=FONT_SM,
+            )
+        else:
+            self._rects["pos_selector"] = None
+            self._rects["ngram_toggle"] = None
+
         self._rects["picker"] = None
         self._rects["picker_items"] = []
         self._rects["sort_picker"] = None
         self._rects["sort_picker_items"] = []
 
+        subtitle_y = panel.y + 78
+        main_right = panel.x + 24
+        labels, values, summary, subtitle = self._compute()
+        pairs = self._ordered_pairs(labels, values)
+        labels = [p[0] for p in pairs]
+        values = [p[1] for p in pairs]
+
+        graph_top = max(panel.y + 92, subtitle_y + 44)
+        footer_top = panel.bottom - 74
+        graph_height = max(120, footer_top - graph_top)
+        graph_area = pygame.Rect(
+            panel.x + 24,
+            graph_top,
+            panel.width - 50,
+            min(graph_height, panel.bottom - graph_top - 24),
+        )
+        self._rects["bar_rects"] = self._draw_graph(surface, graph_area, labels, values, mouse_pos)
+
+        if values:
+            min_v = min(values)
+            max_v = max(values)
+        else:
+            min_v = 0
+            max_v = 0
+
+        mean_v, median_v, std_v = summary
+        summary_text = (
+            f"Mean: {mean_v:.2f}  {special_chars['*']}  Median: {median_v:.2f}  "
+            f"{special_chars['*']}  Std Dev: {std_v:.2f}    |    "
+            f"Min: {min_v:.2f}  {special_chars['*']}  Max: {max_v:.2f}"
+        )
+        blit_text(surface, summary_text, FONT_SM, MUTED, panel.x + 24, panel.bottom - 36)
+
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
+        self._rects["close"] = close_btn
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=RED,
+            fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
+        # Draw dropdowns last so they stay above the graph and footer widgets.
         if self._picker_open:
-            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, 240, 270)
+            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, 240, 300)
             self._rects["picker"] = picker
             draw_panel(surface, picker, PANEL2, BORDER, radius=12)
 
@@ -4081,7 +4539,12 @@ class ShowStatisticsModal:
             start = clamp(self._sort_picker_scroll, 0, max(0, len(sort_items) - visible))
             items = []
             for i, (key, label) in enumerate(sort_items[start : start + visible], start=start):
-                r = pygame.Rect(picker.x + 10, picker.y + 8 + (i - start) * (row_h + gap), picker.width - 20, row_h)
+                r = pygame.Rect(
+                    picker.x + 10,
+                    picker.y + 8 + (i - start) * (row_h + gap),
+                    picker.width - 20,
+                    row_h,
+                )
                 items.append((i, key, label, r))
                 fill = BLUE_BG if key == self.sort_order else PANEL
                 border = ACCENT if key == self.sort_order else BORDER
@@ -4093,78 +4556,221 @@ class ShowStatisticsModal:
                 pygame.draw.rect(surface, border, r, 1, border_radius=8)
                 blit_text(surface, label, FONT_SM, TEXT, r.x + 10, r.centery, anchor="midleft")
             self._rects["sort_picker_items"] = items
-        
-        subtitle_y = panel.y + 60
-        main_right = stat_selector.right + 12
 
-        if self.stat_key == "pos_letters":
-            max_pos = max(1, max((len(w) for w in self.words), default=1))
-            extra_btn = pygame.Rect(main_right, subtitle_y, 170, 30)
-            self._rects["pos_selector"] = extra_btn
-            draw_button(
-                surface,
-                extra_btn,
-                f"Position: {self.pos_index + 1}/{max_pos}",
-                bg=BLUE_BG,
-                fg=TEXT,
-                hovered=extra_btn.collidepoint(mouse_pos),
-                font=FONT_SM,
-            )
-            subtitle_x = extra_btn.right + 12
-        elif self.stat_key == "bigrams":
-            extra_btn = pygame.Rect(main_right, subtitle_y, 120, 30)
-            self._rects["ngram_toggle"] = extra_btn
-            draw_button(
-                surface,
-                extra_btn,
-                "Bi" if self.ngram_size == 2 else "Tri",
-                bg=PURPLE,
-                fg=WHITE,
-                hovered=extra_btn.collidepoint(mouse_pos),
-                font=FONT_SM,
-            )
-            subtitle_x = extra_btn.right + 12
-        else:
-            self._rects["pos_selector"] = None
-            self._rects["ngram_toggle"] = None
-            subtitle_x = main_right
 
-        labels, values, summary, subtitle = self._compute()
-        pairs = self._ordered_pairs(labels, values)
-        labels = [p[0] for p in pairs]
-        values = [p[1] for p in pairs]
+class SummaryModal:
+    """Pygame modal replacement for the old tkinter 'Slots Review' /
+    'Patterns Review' popup. Shows the same content (current input-mode
+    constraints for whichever finder mode was active when opened), plus a
+    Copy button (copies the plain-text summary to the clipboard) and a
+    Close button."""
 
-        graph_area = pygame.Rect(
-            panel.x + 24,
-            panel.y + 90,
-            panel.width - 50,
-            panel.height - 240,
+    def __init__(self):
+        self.visible = False
+        self.finder_mode = "letter_match"
+        self._scroll = 0
+        self._dragging_sb = False
+        self._drag_offset = 0
+        self._max_scroll_cache = 0
+        self._rects = {}
+        self._copied_flash = 0  # frames remaining to show "Copied!" feedback
+
+    def show(self, finder_mode):
+        self.visible = True
+        self.finder_mode = finder_mode
+        self._scroll = 0
+        self._copied_flash = 0
+
+    def hide(self):
+        self.visible = False
+
+    def _panel_rect(self, W, H):
+        pw = min(560, W - 80)
+        ph = min(640, H - 60)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _title(self):
+        return "Patterns Review" if self.finder_mode == "pattern_hunt" else "Slots Review"
+
+    def _lines(self):
+        return build_summary_lines()
+
+    def _content_height(self, panel):
+        PAD_ = 22
+        max_w = panel.width - PAD_ * 2
+        line_h = FONT_SM.get_height() + 4
+        h = 0
+        for text in self._lines():
+            if text == "":
+                h += line_h
+                continue
+            for _ in self._wrap(text, FONT_SM, max_w):
+                h += line_h
+        return h
+
+    @property
+    def _max_scroll(self):
+        return getattr(self, "_max_scroll_cache", 0)
+
+    def _content_rect(self, panel):
+        top = panel.y + 72
+        bottom = panel.bottom - 54
+        return pygame.Rect(panel.x + 18, top, panel.width - 36, bottom - top)
+
+    def _scrollbar_rects(self, panel):
+        content = self._content_rect(panel)
+        visible_h = content.height
+        total_h = self._content_height(panel)
+        self._max_scroll_cache = max(0, total_h - visible_h)
+        if total_h <= visible_h:
+            return None, None
+        track = pygame.Rect(panel.right - 16, content.y, 6, content.height)
+        ratio = visible_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * self._scroll / max(1, self._max_scroll_cache)
         )
-        self._draw_graph(surface, graph_area, labels, values, mouse_pos)
+        return track, pygame.Rect(track.x, thumb_y, 6, thumb_h)
 
-        if values:
-            min_v = min(values)
-            max_v = max(values)
-        else:
-            min_v = 0
-            max_v = 0
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
 
-        mean_v, median_v, std_v = summary
-        summary = f"Mean: {mean_v:.2f}  {special_chars["*"]}  Median: {median_v:.2f}  {special_chars["*"]}  Std Dev: {std_v:.2f}  {special_chars["*"]}  Min: {min_v:.2f}  {special_chars["*"]}  Max: {max_v:.2f}"
+        panel = self._panel_rect(W, H)
 
-        blit_text(surface, summary, FONT_SM, MUTED, panel.x + 24, panel.bottom - 36)
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return True
+
+        track, thumb = self._scrollbar_rects(panel)
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            if thumb and thumb.collidepoint(event.pos):
+                self._dragging_sb = True
+                self._drag_offset = event.pos[1] - thumb.y
+                return True
+
+            if not panel.collidepoint(event.pos):
+                self.hide()
+                return True
+
+            copy_btn = self._rects.get("copy")
+            if copy_btn and copy_btn.collidepoint(event.pos):
+                text = "\n".join(self._lines())
+                if copy_to_clipboard(text):
+                    self._copied_flash = 90
+                return True
+
+            close_btn = self._rects.get("close")
+            if close_btn and close_btn.collidepoint(event.pos):
+                self.hide()
+                return True
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_sb and track:
+            new_y = event.pos[1] - self._drag_offset
+            max_thumb_y = track.y + track.height - thumb.height
+            ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+            self._scroll = max(0, min(self._max_scroll, ratio * self._max_scroll))
+            return True
+
+        if event.type == pygame.MOUSEWHEEL:
+            if panel.collidepoint(pygame.mouse.get_pos()):
+                self._scroll = max(
+                    0, min(self._max_scroll, self._scroll - event.y * 20)
+                )
+                return True
+
+        return True
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+
+        if self._copied_flash > 0:
+            self._copied_flash -= 1
+
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 180))
+        surface.blit(overlay, (0, 0))
+
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, ACCENT, radius=16)
+
+        blit_text(surface, self._title(), FONT_LG, TEXT, panel.x + 22, panel.y + 18)
+
+        content = self._content_rect(panel)
+
+        clip_rect = pygame.Rect(
+            content.x - 4, content.y, content.width + 4, content.height
+        )
+        old_clip = surface.get_clip()
+        surface.set_clip(clip_rect)
+
+        line_h = FONT_SM.get_height() + 4
+        y = content.y - int(self._scroll)
+        for text in self._lines():
+            if text == "":
+                y += line_h
+                continue
+            # Section headers (no leading spaces) get accent color/bold feel
+            is_header = not text.startswith(" ")
+            color = ACCENT if is_header else TEXT
+            font = FONT_MD if is_header else FONT_SM
+            for line in self._wrap(text, FONT_SM, content.width):
+                if content.y - line_h <= y <= content.bottom:
+                    surface.blit(font.render(line, True, color), (content.x, y))
+                y += line_h
+
+        surface.set_clip(old_clip)
+
+        track, thumb = self._scrollbar_rects(panel)
+        self._scroll = max(0, min(self._max_scroll_cache, self._scroll))
+        if track:
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, thumb, border_radius=4)
+
+        copy_btn = pygame.Rect(panel.x + 22, panel.bottom - 42, 110, 28)
+        self._rects["copy"] = copy_btn
+        copy_label = "Copied!" if self._copied_flash > 0 else "Copy"
+        draw_button(
+            surface, copy_btn, copy_label,
+            bg=GREEN if self._copied_flash > 0 else TEAL, fg=WHITE,
+            hovered=copy_btn.collidepoint(mouse_pos), font=FONT_SM,
+        )
 
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
         self._rects["close"] = close_btn
         draw_button(
-            surface,
-            close_btn,
-            "Close",
-            bg=RED,
-            fg=WHITE,
-            hovered=close_btn.collidepoint(mouse_pos),
-            font=FONT_SM,
+            surface, close_btn, "Close", bg=RED, fg=WHITE,
+            hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM
         )
+
+    @staticmethod
+    def _wrap(text, font, max_w):
+        if not text:
+            return [""]
+        # Preserve leading whitespace (used for indentation) as a prefix,
+        # then word-wrap the remainder.
+        stripped = text.lstrip(" ")
+        indent = text[: len(text) - len(stripped)]
+        words = stripped.split(" ")
+        lines, current = [], indent
+        for word in words:
+            sep = " " if current not in ("", indent) else ""
+            test = current + sep + word
+            if font.size(test)[0] <= max_w:
+                current = test
+            else:
+                if current:
+                    lines.append(current)
+                current = indent + word
+        if current:
+            lines.append(current)
+        return lines or [indent]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -4461,11 +5067,14 @@ class SearchJob:
         if wl is not None and len(word) != wl:
             return False
 
-        rows = ["start", "middle", "end"]
+        rows = ["start", "inner", "middle", "end"]
+        ok = True
 
         def row_match(row_name, pat_info):
             if row_name == "start":
                 return _pat_matches_start(word, pat_info, self.language)
+            if row_name == "inner":
+                return _pat_matches_inner(word, pat_info, self.language)
             if row_name == "middle":
                 return _pat_matches_middle(word, pat_info, self.language)
             return _pat_matches_end(word, pat_info, self.language)
@@ -4493,30 +5102,38 @@ class SearchJob:
                 for p in self.ph_slots[row]["absent"][: self.ph_slot_count[row]["absent"]]
                 if p["seq"]
             ]
-            for pat in absent_pats:
-                for variant in _exist_variants(pat):
-                    if variant and variant in word:
-                        return False
+            if any(row_match(row, pat) for pat in absent_pats):
+                ok = False
+                break
+            if not ok:
+                break
 
+            # EXIST constraints
             if row == "start":
                 if not _check_start_exist(word, exist_pats):
-                    return False
+                    ok = False
+                    break
             elif row == "inner":
                 if not _check_inner_exist(word, exist_pats):
-                    return False
+                    ok = False
+                    break
             elif row == "middle":
                 if not _check_middle_exist(word, exist_pats):
-                    return False
+                    ok = False
+                    break
             else:
                 if not _check_end_exist(word, exist_pats):
-                    return False
+                    ok = False
+                    break
 
             if valid_pats and not any(row_match(row, p) for p in valid_pats):
-                return False
+                ok = False
+                break
             if invalid_pats and any(row_match(row, p) for p in invalid_pats):
-                return False
+                ok = False
+                break
 
-        return True
+        return ok
 
     def _run(self):
         try:
@@ -4729,7 +5346,7 @@ class AppState:
         self.preview_start = clamp(self.preview_start, 0, len(self.search_results) - 1)
 
     def active_ph_mode_modes(self):
-        return ["start", "middle", "end"]
+        return PH_ROWS
 
     def ph_selected_slot_idx(self, row=None, col=None):
         row = row if row is not None else self.ph_mode
@@ -4804,10 +5421,6 @@ def ph_adjust_cell_count(delta, row=None, col=None):
 # ══════════════════════════════════════════════════════════════════
 
 tk_root = None
-summary_tk_root = None
-summary_win = None
-summary_text = None
-summary_open = False
 enrichment_choice_win = None
 manual_entry_win = None
 
@@ -4841,41 +5454,22 @@ def format_set(s):
     return " ".join("".join(sorted(x)) for x in s) if s else f"{special_chars["-"]}"
 
 
-def open_summary_window():
-    global summary_win, summary_text, summary_open
-    root = get_tk_root()
-    if summary_win is None or not summary_win.winfo_exists():
-        title = (
-            "Patterns Review" if state.finder_mode == "pattern_hunt" else "Slots Review"
-        )
-        summary_win = Toplevel(root)
-        summary_win.title(title)
-        summary_win.geometry("520x620")
-        summary_win.protocol("WM_DELETE_WINDOW", close_summary_window)
-        summary_text = Text(summary_win, wrap="word", font=("Segoe UI", 10))
-        summary_text.pack(fill="both", expand=True)
-        btn = Button(summary_win, text="Close", command=close_summary_window)
-        btn.pack(pady=6)
-    else:
-        summary_win.deiconify()
-        summary_win.lift()
-        summary_win.focus_force()
-    summary_open = True
-    refresh_summary_window()
+def copy_to_clipboard(text: str) -> bool:
+    """Copies text to the system clipboard using a hidden Tk root.
+    Returns True on success."""
+    try:
+        root = get_tk_root()
+        root.clipboard_clear()
+        root.clipboard_append(text)
+        root.update()  # flush clipboard change so it persists after we lose focus
+        return True
+    except Exception:
+        return False
 
 
-def close_summary_window():
-    global summary_win, summary_text, summary_open
-    summary_open = False
-    if summary_win is not None and summary_win.winfo_exists():
-        summary_win.destroy()
-    summary_win = None
-    summary_text = None
-
-
-def refresh_summary_window():
-    if not summary_open or summary_win is None or not summary_win.winfo_exists():
-        return
+def build_summary_lines():
+    """Builds the text lines for the Slots Review / Patterns Review modal,
+    shared between the on-screen display and the copy-to-clipboard action."""
     lines = []
     if state.finder_mode == "letter_match":
         lines.append("VALID")
@@ -4899,6 +5493,19 @@ def refresh_summary_window():
             lines.append("  " + f" {special_chars["*"]} ".join(parts))
         else:
             lines.append(f"  {special_chars["-"]}")
+        lines.append("")
+        lines.append("ABSENT")
+        if state.absent_letters:
+            parts = []
+            for key in state.absent_letters:
+                if state.language == "greek":
+                    group = GREEK_GROUP_BY_FIRST.get(key, (key,))
+                else:
+                    group = ENGLISH_GROUP_BY_FIRST.get(key, (key,))
+                parts.append("".join(group))
+            lines.append("  " + f" {special_chars["*"]} ".join(parts))
+        else:
+            lines.append(f"  {special_chars["-"]}")
     else:
         # Pattern Hunt
         for row_name in ["start", "inner", "middle", "end"]:
@@ -4917,21 +5524,14 @@ def refresh_summary_window():
                     else:
                         lines.append(f"    {i+1}: {special_chars['-']}")
             lines.append("")
-    summary_text.delete("1.0", END)
-    summary_text.insert("1.0", "\n".join(lines))
+    return lines
 
 
-def pump_tk_windows():
-    global tk_root, summary_win, summary_text, summary_open
-    if tk_root is None or not tk_root.winfo_exists():
-        return
-    try:
-        tk_root.update_idletasks()
-        tk_root.update()
-    except TclError:
-        summary_win = None
-        summary_text = None
-        summary_open = False
+def refresh_summary_window():
+    """No-op kept for compatibility: the Slots/Patterns Review is now a
+    pygame modal (SummaryModal) that reads live state on every draw, so no
+    manual refresh call is needed."""
+    return
 
 
 def _tk_root_temp():
@@ -5136,13 +5736,13 @@ def ph_add_letter(ch):
 
 
 def ph_backspace():
+    """Fully clears the current Pattern Hunt slot(s), acting as a delete
+    button rather than a single-character backspace."""
     row, col = ph_cell_key()
     for idx in ph_target_slots():
         slot = ph_cell_slots(row, col)[idx]
-        if slot["seq"]:
-            slot["seq"] = slot["seq"][:-1]
-            if not slot["seq"]:
-                slot["expanded"] = False
+        slot["seq"] = ""
+        slot["expanded"] = False
 
 
 def ph_toggle_expand():
@@ -5462,6 +6062,20 @@ def get_word_translation(word, language):
         return entry.get("greek_translation")
     else:
         return entry.get("english_translation")
+
+
+def get_word_first_definition(word, language):
+    """Returns only the first saved sense's definition text for `word`,
+    or None if no senses are saved. Used for compact single-line display
+    (e.g. in the Show Words list) rather than the full multi-sense tooltip."""
+    entry = lookup_word_entry(word, language)
+    if entry is None:
+        return None
+    senses = entry.get("senses") or []
+    if not senses:
+        return None
+    definition = senses[0].get("definition", "")
+    return definition or None
 
 
 def format_progress_result_lines(job_kind, entry, language):
@@ -6257,6 +6871,14 @@ def render_workspace_lm(mouse_pos):
         tip_pad = 8
         tip_rect = tip_img.get_rect(topleft=(hover_pos[0] + 16, hover_pos[1] + 16))
         tip_rect.inflate_ip(tip_pad * 2, tip_pad * 2)
+        if tip_rect.right > WIDTH - PAD:
+            tip_rect.right = WIDTH - PAD
+        if tip_rect.bottom > HEIGHT - PAD:
+            tip_rect.bottom = HEIGHT - PAD
+        if tip_rect.left < PAD:
+            tip_rect.left = PAD
+        if tip_rect.top < PAD:
+            tip_rect.top = PAD
         pygame.draw.rect(screen, DARK, tip_rect, border_radius=8)
         pygame.draw.rect(screen, BORDER, tip_rect, 1, border_radius=8)
         screen.blit(tip_img, tip_img.get_rect(center=tip_rect.center))
@@ -6450,6 +7072,14 @@ def render_workspace_ph(mouse_pos):
         tip_pad = 8
         tip_rect = tip_img.get_rect(topleft=(hover_pos[0] + 16, hover_pos[1] + 16))
         tip_rect.inflate_ip(tip_pad * 2, tip_pad * 2)
+        if tip_rect.right > WIDTH - PAD:
+            tip_rect.right = WIDTH - PAD
+        if tip_rect.bottom > HEIGHT - PAD:
+            tip_rect.bottom = HEIGHT - PAD
+        if tip_rect.left < PAD:
+            tip_rect.left = PAD
+        if tip_rect.top < PAD:
+            tip_rect.top = PAD
         pygame.draw.rect(screen, DARK, tip_rect, border_radius=8)
         pygame.draw.rect(screen, BORDER, tip_rect, 1, border_radius=8)
         screen.blit(tip_img, tip_img.get_rect(center=tip_rect.center))
@@ -6780,6 +7410,10 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
             tip_rect.right = WIDTH - PAD
         if tip_rect.bottom > HEIGHT - PAD:
             tip_rect.bottom = HEIGHT - PAD
+        if tip_rect.left < PAD:
+            tip_rect.left = PAD
+        if tip_rect.top < PAD:
+            tip_rect.top = PAD
 
         pygame.draw.rect(screen, PANEL, tip_rect, border_radius=10)
         pygame.draw.rect(screen, ACCENT, tip_rect, 2, border_radius=10)
@@ -6806,6 +7440,7 @@ if __name__ == "__main__":
     enrichment_modal = EnrichmentModal()
     words_modal = ShowWordsModal()
     stats_modal = ShowStatisticsModal()
+    summary_modal = SummaryModal()
     dragging = None  # None | 'wl' | 'mp'
     running = True
 
@@ -6867,18 +7502,10 @@ if __name__ == "__main__":
         info_modal.draw(screen, WIDTH, HEIGHT)
         progress_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         enrichment_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
-        words_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         stats_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        words_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        summary_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
 
-        if summary_win is not None and summary_win.winfo_exists():
-            try:
-                summary_win.update_idletasks()
-            except TclError:
-                summary_win = None
-                summary_text = None
-                summary_open = False
-
-        pump_tk_windows()
         pygame.display.flip()
         clock.tick(60)
 
@@ -6910,6 +7537,9 @@ if __name__ == "__main__":
                 continue
 
             if stats_modal.visible and stats_modal.handle_event(event, WIDTH, HEIGHT):
+                continue
+
+            if summary_modal.visible and summary_modal.handle_event(event, WIDTH, HEIGHT):
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN:
@@ -6951,10 +7581,10 @@ if __name__ == "__main__":
 
                     # Summary btn
                     elif summary_btn.collidepoint(mx, my):
-                        if summary_open:
-                            close_summary_window()
+                        if summary_modal.visible:
+                            summary_modal.hide()
                         else:
-                            open_summary_window()
+                            summary_modal.show(state.finder_mode)
 
                     # PH column toggle (Valid/Invalid/Exist row under Start/Middle/End)
                     elif ph_col_rects is not None and ph_col_rects[0].collidepoint(mx, my):
@@ -7286,6 +7916,9 @@ if __name__ == "__main__":
                         if state.input_mode == "exist":
                             # Delete selected exist item
                             delete_exist_item_at(state.selected_exist_idx)
+                        elif state.input_mode == "absent":
+                            # Delete selected absent item
+                            delete_absent_item_at(state.selected_absent_idx)
                         else:
                             for p in target_positions():
                                 if 0 <= p < state.word_length:
@@ -7486,19 +8119,10 @@ if __name__ == "__main__":
                 else:
                     ch = event.unicode
                     if len(ch) == 1 and ch.isalpha():
-                        if state.finder_mode == "letter_match":
-                            if state.input_mode == "exist":
-                                add_exist_letter(ch)
-                            else:
-                                toggle_letter(ch)
-                        else:
-                            ph_add_letter(ch)
+                        handle_text_input(ch)
                         refresh_summary_window()
 
-    if summary_win is not None and summary_win.winfo_exists():
-        summary_win.destroy()
     if tk_root is not None and tk_root.winfo_exists():
         tk_root.destroy()
 
     pygame.quit()
-    sys.exit()
