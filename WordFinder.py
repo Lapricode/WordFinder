@@ -2036,7 +2036,7 @@ class InfoModal:
         (
             f"Show Statistics {special_chars['-']} bar charts (length, letters, "
             "position, vowel ratio, unique letters, first/last letter, bigrams/"
-            "trigrams, syllables) with sorting and orientation controls; bar values "
+            "trigrams) with sorting and orientation controls; bar values "
             "are always visible, and hovering a bar highlights it while dimming the "
             "others.",
             "bullet",
@@ -3882,12 +3882,27 @@ class ShowWordsModal:
 
         if hovered_word is not None:
             lines = [(hovered_word, FONT_MD, TEXT)]
-            translation = get_word_translation(hovered_word, self.language)
-            if translation:
-                lines.append((f"{hovered_word} {special_chars['>']} {translation}", FONT_SM, ACCENT))
-            definition = get_word_first_definition(hovered_word, self.language)
-            if definition:
-                lines.append((definition, FONT_SM, MUTED))
+
+            entry = lookup_word_entry(hovered_word, self.language)
+
+            if state.show_translation:
+                tr = None
+                if entry is not None:
+                    tr = (
+                        entry.get("greek_translation")
+                        if self.language == "english"
+                        else entry.get("english_translation")
+                    )
+                tr_text = (
+                    f"{hovered_word} {special_chars['>']} {tr}"
+                    if tr
+                    else f"{hovered_word} {special_chars['>']} (no translation yet)"
+                )
+                lines.append((tr_text, FONT_SM, ACCENT))
+
+            if state.show_meaning:
+                for ml in format_meaning_lines(entry, self.language):
+                    lines.append((ml, FONT_SM, MUTED))
 
             if len(lines) > 1:
                 pad = 10
@@ -4266,14 +4281,30 @@ class ShowStatisticsModal:
                 prelim.append((lbl, val, bar))
                 x += bar_w + gap
 
+            # The value text above each bar should be just as clickable/
+            # hoverable as the bar itself, since a bar for a small value can
+            # shrink to just a few pixels tall (or 0) and become impossible
+            # to hit. Compute the value-text rect up front and use the
+            # union of bar + value-text as the interactive hit area.
+            hit_prelim = []
+            for lbl, val, bar in prelim:
+                val_img = FONT_SM.render(str(val), True, TEXT)
+                val_rect = val_img.get_rect(midbottom=(bar.centerx, bar.y - 3))
+                hit_rect = bar.union(val_rect)
+                hit_prelim.append((lbl, val, bar, val_rect, hit_rect))
+
             hovered_idx = next(
-                (i for i, (_, _, b) in enumerate(prelim) if b.collidepoint(mouse_pos)),
+                (
+                    i
+                    for i, (_, _, _, _, hit) in enumerate(hit_prelim)
+                    if hit.collidepoint(mouse_pos)
+                ),
                 None,
             )
 
             base_y = inner.bottom - bottom_label_h + 1
 
-            for i, (lbl, val, bar) in enumerate(prelim):
+            for i, (lbl, val, bar, val_rect, hit_rect) in enumerate(hit_prelim):
                 is_hover = i == hovered_idx
 
                 if hovered_idx is None:
@@ -4309,7 +4340,7 @@ class ShowStatisticsModal:
                     anchor="midtop",
                 )
 
-                bar_rects.append((lbl, val, bar))
+                bar_rects.append((lbl, val, hit_rect))
 
         else:
             n = len(labels)
@@ -4340,12 +4371,27 @@ class ShowStatisticsModal:
                 prelim.append((lbl, val, row, bar))
                 y += row_h + gap_y
 
+            # Same reasoning as the vertical case: include the value-text
+            # rect (drawn to the right of the bar) in the clickable/
+            # hoverable area, since a small value can produce a very thin
+            # or even zero-width bar.
+            hit_prelim = []
+            for lbl, val, row, bar in prelim:
+                val_img = FONT_SM.render(str(val), True, TEXT)
+                val_rect = val_img.get_rect(midleft=(bar.right + 8, row.centery))
+                hit_rect = bar.union(val_rect)
+                hit_prelim.append((lbl, val, row, bar, val_rect, hit_rect))
+
             hovered_idx = next(
-                (i for i, (_, _, _, b) in enumerate(prelim) if b.collidepoint(mouse_pos)),
+                (
+                    i
+                    for i, (_, _, _, _, _, hit) in enumerate(hit_prelim)
+                    if hit.collidepoint(mouse_pos)
+                ),
                 None,
             )
 
-            for i, (lbl, val, row, bar) in enumerate(prelim):
+            for i, (lbl, val, row, bar, val_rect, hit_rect) in enumerate(hit_prelim):
                 is_hover = i == hovered_idx
 
                 if hovered_idx is None:
@@ -4381,7 +4427,7 @@ class ShowStatisticsModal:
                     anchor="midleft",
                 )
 
-                bar_rects.append((lbl, val, bar))
+                bar_rects.append((lbl, val, hit_rect))
 
         return bar_rects
 
@@ -5532,6 +5578,10 @@ class AppState:
     def get_exist_items(self):
         """Return list of (key, count) for exist letters."""
         return list(self.exist_letters.items())
+
+    def get_absent_letters(self):
+        """Return list of absent letters."""
+        return list(enumerate(state.absent_letters))
 
     def cycle_input_mode_lm(self, step):
         idx = INPUT_MODES_LM.index(self.input_mode)
@@ -7045,7 +7095,7 @@ def render_workspace_lm(mouse_pos):
 
     # ── Exist + Absent rows ─────────────────────────────────────────
     exist_items = state.get_exist_items()
-    absent_items = list(enumerate(state.absent_letters))
+    absent_items = state.get_absent_letters()
 
     exist_row_h = row_h
     half_w = (WIDTH - 3 * PAD) // 2
@@ -8222,6 +8272,12 @@ if __name__ == "__main__":
                                 state.selected_exist_idx = (
                                     state.selected_exist_idx - 1
                                 ) % len(items)
+                        elif state.input_mode == "absent":
+                            letters = state.get_absent_letters()
+                            if letters:
+                                state.selected_absent_idx = (
+                                    state.selected_absent_idx - 1
+                                ) % len(letters)                        
                         else:
                             if state.word_length > 0:
                                 state.selected_pos = (
@@ -8245,6 +8301,12 @@ if __name__ == "__main__":
                                 state.selected_exist_idx = (
                                     state.selected_exist_idx + 1
                                 ) % len(items)
+                        elif state.input_mode == "absent":
+                            letters = state.get_absent_letters()
+                            if letters:
+                                state.selected_absent_idx = (
+                                    state.selected_absent_idx + 1
+                                ) % len(letters)                        
                         else:
                             if state.word_length > 0:
                                 state.selected_pos = (
