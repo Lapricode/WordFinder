@@ -3509,7 +3509,7 @@ class ShowWordsModal:
         self._picker_scroll[kind] = max(0, int(value))
 
     def _panel_rect(self, W, H):
-        pw = min(520 if self.narrow else 780, W - 80)
+        pw = min(700 if self.narrow else 800, W - 80)
         ph = min(640, H - 60)
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
 
@@ -6798,7 +6798,7 @@ def render_file_row(mouse_pos):
         return br, path_rect
 
     # ── Column widths for equal spacing across the whole row ──
-    action_col_w = 120
+    action_col_w = 150
     theme_w = 100
     save_w = 130
     col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
@@ -6851,8 +6851,8 @@ def render_file_row(mouse_pos):
         meaning_x, chk_y, state.show_meaning, "Show Meaning"
     )
 
-    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w + 20, action_btn_h)
-    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w + 10, action_btn_h)
+    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w + 10, action_btn_h)
+    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w - 10, action_btn_h)
 
     draw_button(
         screen,
