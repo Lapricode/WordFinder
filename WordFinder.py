@@ -710,9 +710,9 @@ def greek_tone_variant(ch: str, tone_state: int):
 
 def keyboard_char_for(base: str):
     if state.language == "english":
-        return base.upper() if state.keyboard_shift else base.lower()
+        return base.upper() if state.keyboard_caps else base.lower()
 
-    ch = base.upper() if state.keyboard_shift else base.lower()
+    ch = base.upper() if state.keyboard_caps else base.lower()
     return greek_tone_variant(ch, state.keyboard_tone)
 
 
@@ -767,7 +767,7 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
 
     # Widths of the non-letter controls
     backspace_w = 90
-    shift_w = 80
+    caps_w = 80
     lang_btn_w = 220
     tone_w = 80
 
@@ -787,7 +787,7 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
     row2_available = (
         kb_rect.width
         - 16
-        - shift_w
+        - caps_w
         - tone_w
         - 2 * key_gap
     )
@@ -891,29 +891,29 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
     # Row 2
     row2_y = row_top_1 + row_h + row_gap
 
-    # Shift
-    shift_rect = pygame.Rect(
+    # Caps
+    caps_rect = pygame.Rect(
         kb_rect.x + 8,
         row2_y,
-        shift_w,
+        caps_w,
         row_h,
     )
 
-    controls["shift"] = shift_rect
+    controls["caps"] = caps_rect
 
     draw_button(
         surface,
-        shift_rect,
-        "Shift on" if state.keyboard_shift else "Shift off",
-        bg=ORANGE if state.keyboard_shift else BROWN,
+        caps_rect,
+        "Caps on" if state.keyboard_caps else "Caps off",
+        bg=ORANGE if state.keyboard_caps else BROWN,
         fg=WHITE,
         radius=7,
-        hovered=shift_rect.collidepoint(mouse_pos),
+        hovered=caps_rect.collidepoint(mouse_pos),
         font=FONT_SM,
     )
 
     # Row 2 letters
-    row2_start_x = shift_rect.right + key_gap
+    row2_start_x = caps_rect.right + key_gap
 
     for i, base in enumerate(row2):
         r = pygame.Rect(
@@ -4562,11 +4562,12 @@ class ShowStatisticsModal:
 
         title_rect = blit_text(surface, "Show Statistics", FONT_LG, TEXT, panel.x + 24, panel.y + 18)
 
+        stat_selector_w = 160
         orient_btn_w = 120
         sort_btn_w = 120
         controls_y = panel.y + 18 + max(0, (title_rect.height - 30) // 2)
 
-        stat_selector = pygame.Rect(title_rect.right + 18, controls_y, 160, 30)
+        stat_selector = pygame.Rect(title_rect.right + 18, controls_y, stat_selector_w, 30)
         orient_btn = pygame.Rect(panel.right - orient_btn_w - 10, controls_y, orient_btn_w, 30)
         sort_btn = pygame.Rect(orient_btn.left - sort_btn_w - 10, controls_y, sort_btn_w, 30)
 
@@ -4695,7 +4696,7 @@ class ShowStatisticsModal:
 
         # Draw dropdowns last so they stay above the graph and footer widgets.
         if self._picker_open:
-            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, 240, 300)
+            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, stat_selector_w, 300)
             self._rects["picker"] = picker
             draw_panel(surface, picker, PANEL2, BORDER, radius=12)
 
@@ -5447,7 +5448,7 @@ class AppState:
         self._prev_word_length = 5
 
         self.keyboard_on = False
-        self.keyboard_shift = False
+        self.keyboard_caps = False
         self.keyboard_tone = 0  # 0=plain, 1=tonos, 2=diaeresis, 3=both
 
         # ── Pattern Hunt state ──
@@ -6797,7 +6798,7 @@ def render_file_row(mouse_pos):
         return br, path_rect
 
     # ── Column widths for equal spacing across the whole row ──
-    action_col_w = 150
+    action_col_w = 120
     theme_w = 100
     save_w = 130
     col_widths = [unit_w, unit_w, unit_w, action_col_w, action_col_w, save_w, theme_w]
@@ -6850,8 +6851,8 @@ def render_file_row(mouse_pos):
         meaning_x, chk_y, state.show_meaning, "Show Meaning"
     )
 
-    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w + 10, action_btn_h)
-    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w - 10, action_btn_h)
+    translate_btn = pygame.Rect(translate_x, btn_y, action_col_w + 20, action_btn_h)
+    meaning_btn = pygame.Rect(meaning_x, btn_y, action_col_w + 10, action_btn_h)
 
     draw_button(
         screen,
@@ -8137,8 +8138,8 @@ if __name__ == "__main__":
                                     state.status = f"Language: {state.language.title()}"
                                     state.results_cache_dirty = True
                                     break
-                                if controls.get("shift") and controls["shift"].collidepoint(mx, my):
-                                    state.keyboard_shift = not state.keyboard_shift
+                                if controls.get("caps") and controls["caps"].collidepoint(mx, my):
+                                    state.keyboard_caps = not state.keyboard_caps
                                     break
                                 if controls.get("tone") and controls["tone"].collidepoint(mx, my):
                                     state.keyboard_tone = (state.keyboard_tone + 1) % 4
