@@ -3486,8 +3486,18 @@ class ShowWordsModal:
         self.visible = True
         self.words = list(words or [])
         self.language = language
-        self.letter_filter = "All"
-        self.length_filter = "All"
+
+        # letter_filter / length_filter are intentionally NOT reset here so
+        # the previously chosen droplist selections persist across
+        # close/reopen. If the language changed since the last time this
+        # was open, the previous letter_filter may no longer be part of
+        # this language's alphabet, so fall back to "All" only in that case.
+        letters, lengths = self._options()
+        if self.letter_filter not in letters:
+            self.letter_filter = "All"
+        if self.length_filter not in lengths:
+            self.length_filter = "All"
+
         self._scroll = 0
         self._picker_kind = None
         self._picker_open = False
@@ -4029,14 +4039,12 @@ class ShowStatisticsModal:
         self.visible = True
         self.words = list(words or [])
         self.language = language
-        self.stat_key = "length"
-        self.chart_orientation = "vertical"
-        self.pos_index = 0
-        self.ngram_size = 2
-        self.top_n = 25
+        # stat_key, chart_orientation, pos_index, ngram_size, top_n, and
+        # sort_order are intentionally NOT reset here so the previously
+        # chosen droplist/settings persist across close/reopen. Only
+        # transient picker UI state resets.
         self._picker_open = False
         self._picker_scroll = 0
-        self.sort_order = "normal"
         self._sort_picker_open = False
         self._sort_picker_scroll = 0
         
