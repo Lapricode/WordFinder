@@ -2035,8 +2035,8 @@ class InfoModal:
         ),
         (
             f"Show Statistics {special_chars['-']} bar charts (length, letters, "
-            "position, vowel ratio, unique letters, first/last letter, bigrams/"
-            "trigrams) with sorting and orientation controls; bar values "
+            "position, vowel ratio, unique letters, first/last letter, bi-/"
+            "tri-/tetra-/penta-/grams) with sorting and orientation controls; bar values "
             "are always visible, and hovering a bar highlights it while dimming the "
             "others.",
             "bullet",
@@ -4152,7 +4152,7 @@ class ShowStatisticsModal:
             labels = [k.upper() for k, _ in pairs]
             data = [v for _, v in pairs]
             summary = _stats_summary(data)
-            title = "Bigram frequency" if n == 2 else "Trigram frequency"
+            title = ["Bigram", "Trigram", "Tetragram", "Pentagram"][n-2] + " frequency"
             return labels, data, summary, title
 
         # syllables
@@ -4505,7 +4505,7 @@ class ShowStatisticsModal:
                 return True
 
             if self.stat_key == "ngrams" and self._rects.get("ngram_toggle") and self._rects["ngram_toggle"].collidepoint(event.pos):
-                self.ngram_size = 3 if self.ngram_size == 2 else 2
+                self.ngram_size = ((self.ngram_size - 2) + 1) % 4 + 2
                 return True
 
             for lbl, val, bar in self._rects.get("bar_rects", []):
@@ -4637,7 +4637,7 @@ class ShowStatisticsModal:
             draw_button(
                 surface,
                 extra_btn,
-                "Bi" if self.ngram_size == 2 else "Tri",
+                ["Bi", "Tri", "Tetra", "Penta"][self.ngram_size-2],
                 bg=BLUE_BG,
                 fg=WHITE,
                 hovered=extra_btn.collidepoint(mouse_pos),
@@ -4655,6 +4655,7 @@ class ShowStatisticsModal:
         self._rects["sort_picker_items"] = []
 
         labels, values, summary, subtitle = self._compute()
+        subtitle_rect = blit_text(surface, subtitle, FONT_SM, TEXT, panel.x + 24, panel.y + 50)
         pairs = self._ordered_pairs(labels, values)
         labels = [p[0] for p in pairs]
         values = [p[1] for p in pairs]
@@ -4663,8 +4664,8 @@ class ShowStatisticsModal:
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
         self._rects["close"] = close_btn
 
-        graph_top = extra_bottom + 10
-        graph_bottom = close_btn.top - 8
+        graph_top = extra_bottom + 20
+        graph_bottom = close_btn.top - 5
 
         graph_area = pygame.Rect(
             panel.x + 12,                 # closer to the modal edge
@@ -7172,7 +7173,7 @@ def render_workspace_lm(mouse_pos):
                 hover_pos = mouse_pos
             exist_rects_local.append(chip_rect)
             chip_x += tw_chip + chip_gap
-            if chip_x > exist_rect.right - 40:
+            if chip_x > exist_rect.right - 100:
                 break
     else:
         img = FONT_SM.render(f"{special_chars["-"]}", True, MUTED)
@@ -7213,6 +7214,8 @@ def render_workspace_lm(mouse_pos):
 
             absent_rects_local.append(chip_rect)
             chip_x += tw_chip + chip_gap
+            if chip_x > absent_rect.right - 100:
+                break
     else:
         img = FONT_SM.render(f"{special_chars['-']}", True, MUTED)
         screen.blit(img, img.get_rect(midleft=(absent_rect.x + 90, table_y + exist_row_h // 2)))
