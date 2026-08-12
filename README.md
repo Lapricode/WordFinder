@@ -100,19 +100,19 @@ For the local setup, after cloning the repository, run the appropriate setup scr
 - Linux / macOS
 
 ```bash
-./scripts/setup-local.sh
+./setup_scripts/setup-local.sh
 ```
 
-- Windows (Powershell or Command Prompt)
+- Windows (Powershell)
 
 ```bash
-.\scripts\setup-local.ps1
+.\setup_scripts\setup-local.ps1
 ```
 
 If PowerShell blocks the script because of its execution policy, run:
 
 ```bash
-powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
+powershell -ExecutionPolicy Bypass -File .\setup_scripts\setup-local.ps1
 ```
 
 What the setup script does:
