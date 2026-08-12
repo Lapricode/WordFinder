@@ -95,23 +95,32 @@ pip install deep-translator nltk
 
 ## How to Run
 
-From the project directory, only the first time, extract the JSON files needed for translation and meaning processes.
+For the local setup, after cloning the repository, run the appropriate setup script once from the project directory, only one time.
 
 - Linux / macOS
 
 ```bash
-gzip -dk words/greek_dictionary.json.gz
-gzip -dk words/english_dictionary.json.gz
+./scripts/setup-local.sh
 ```
 
-- Windows (PowerShell or Command Prompt)
+- Windows (Powershell or Command Prompt)
 
-```powershell
-tar -xzf words\greek_dictionary.json.gz
-tar -xzf words\english_dictionary.json.gz
+```bash
+.\scripts\setup-local.ps1
 ```
 
-And then run:
+If PowerShell blocks the script because of its execution policy, run:
+
+```bash
+powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
+```
+
+What the setup script does:
+
+1. Extracts the JSON dictionaries required by the translation and meaning processes from their ".json.gz" archives.
+2. Configures the local ".txt" and ".json" word and dictionary files using Git's "skip-worktree" setting.
+
+And then execute the command below to run the app:
 
 ```bash
 python WordFinder.py
