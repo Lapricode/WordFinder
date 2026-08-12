@@ -115,10 +115,10 @@ If PowerShell blocks the script because of its execution policy, run:
 powershell -ExecutionPolicy Bypass -File .\scripts\setup-local.ps1
 ```
 
-*What the setup script does:
+What the setup script does:
 
 1. Extracts the JSON dictionaries required by the translation and meaning processes from their ".json.gz" archives.
-2. Configures the local ".txt" and ".json" word and dictionary files using Git's "skip-worktree" setting.*
+2. Configures the local ".txt" and ".json" word and dictionary files using Git's "skip-worktree" setting.
 
 To run the app, execute the command below:
 
