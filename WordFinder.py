@@ -4532,7 +4532,14 @@ class DeleteWordsModal:
         self.language = language
         self.title = f"Delete Words from {os.path.basename(file_path) if file_path else 'file'}"
         self.search_text = ""
-        self.matches = []
+        # Ensure previously selected items that exist in this file appear immediately
+        try:
+            all_words = list(load_words(self.file_path)) if self.file_path else []
+        except Exception:
+            all_words = []
+        sel_in_file = [w for w in self.selected if w in all_words]
+        # show selected items first so the user can confirm/delete them
+        self.matches = sel_in_file.copy()
         # keep previous selections if any, do not clear self.selected here
         # make search field active immediately and enable text input
         self._set_active_field("search")
