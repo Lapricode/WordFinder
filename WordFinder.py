@@ -1347,6 +1347,7 @@ else:
     }
 
 pygame.init()
+pygame.key.set_repeat(300, 30)
 pygame.display.set_caption("Word Finder")
 
 WIDTH, HEIGHT = 1400, 700
