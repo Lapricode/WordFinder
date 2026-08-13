@@ -4128,6 +4128,660 @@ class ShowWordsModal:
         return lines or [""]
 
 
+class AddWordsModal:
+    """Modal to add user-entered words to a chosen text file."""
+    ROW_H = 32
+
+    def __init__(self):
+        self.visible = False
+        self.language = "greek"
+        self.file_path = None
+        self.title = "Add Words"
+        self.input_text = ""
+        self.items = []  # words added by user but not yet saved
+        self._scroll = 0
+        self._saving = False
+        self._progress = 0
+        self._rects = {}
+        self.active_field = None
+        self.cursor_pos = 0
+        self.cursor_blink_start = pygame.time.get_ticks()
+        self._dragging_sb = False
+        self._drag_offset = 0
+        self._max_scroll = 0
+
+    def show(self, file_path, language):
+        self.visible = True
+        self.file_path = file_path
+        self.language = language
+        self.title = f"Add Words to {os.path.basename(file_path) if file_path else 'file'}"
+        self.input_text = ""
+        self.items = []
+        self._saving = False
+        self._progress = 0
+        # Make input field active immediately and enable text input
+        self._set_active_field("input")
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def hide(self):
+        self.visible = False
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return True
+            if self.active_field == "input":
+                # Cursor/edition keys
+                if event.key == pygame.K_RETURN:
+                    txt = self.input_text.strip()
+                    if txt:
+                        self.items.append(txt)
+                        self.input_text = ""
+                        self._set_active_field("input")
+                        self._scroll = max(0, self._max_scroll)
+                    return True
+                if event.key == pygame.K_BACKSPACE:
+                    if self.cursor_pos > 0:
+                        self.input_text = (
+                            self.input_text[: self.cursor_pos - 1]
+                            + self.input_text[self.cursor_pos :]
+                        )
+                        self.cursor_pos = max(0, self.cursor_pos - 1)
+                    return True
+                if event.key == pygame.K_DELETE:
+                    if self.cursor_pos < len(self.input_text):
+                        self.input_text = (
+                            self.input_text[: self.cursor_pos]
+                            + self.input_text[self.cursor_pos + 1 :]
+                        )
+                    return True
+                if event.key == pygame.K_LEFT:
+                    self.cursor_pos = max(0, self.cursor_pos - 1)
+                    return True
+                if event.key == pygame.K_RIGHT:
+                    self.cursor_pos = min(len(self.input_text), self.cursor_pos + 1)
+                    return True
+                if event.key == pygame.K_HOME:
+                    self.cursor_pos = 0
+                    return True
+                if event.key == pygame.K_END:
+                    self.cursor_pos = len(self.input_text)
+                    return True
+        if event.type == pygame.TEXTINPUT and self.active_field == "input":
+            # insert at cursor
+            pre = self.input_text[: self.cursor_pos]
+            post = self.input_text[self.cursor_pos :]
+            self.input_text = pre + event.text + post
+            self.cursor_pos += len(event.text)
+            return True
+
+        # Mouse / wheel
+        if event.type in (pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+            wheel_y = 0
+            if event.type == pygame.MOUSEWHEEL:
+                wheel_y = event.y
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+                wheel_y = 1 if event.button == 4 else -1
+            if wheel_y:
+                # scroll list
+                self._scroll = clamp(self._scroll - wheel_y * 20, 0, self._max_scroll)
+                return True
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mp = event.pos
+            panel = self._panel_rect(W, H)
+            if not panel.collidepoint(mp):
+                self.hide()
+                return True
+            # input field click: set cursor position
+            inp_rect = self._rects.get("input")
+            if inp_rect and inp_rect.collidepoint(mp):
+                value = self.input_text
+                target_x = mp[0] - (inp_rect.x + 8)
+                cursor_pos = 0
+                for i in range(len(value) + 1):
+                    if FONT_SM.size(value[:i])[0] >= target_x:
+                        cursor_pos = i
+                        break
+                    cursor_pos = i
+                self._set_active_field("input", cursor_pos)
+                return True
+
+            apply_btn = self._rects.get("apply")
+            close_btn = self._rects.get("close")
+            # scrollbar thumb handling
+            # compute list geometry and scrollbar rects to allow dragging
+            list_top = inp_rect.bottom + 12 if inp_rect else panel.y + 100
+            list_h = panel.bottom - list_top - 64
+            row_stride = self.ROW_H + 6
+            total_h = len(self.items) * row_stride
+            track, thumb = self._scrollbar_rects(panel, list_top, list_h, total_h)
+            if thumb and thumb.collidepoint(mp):
+                self._dragging_sb = True
+                self._drag_offset = mp[1] - thumb.y
+                return True
+
+            if close_btn and close_btn.collidepoint(mp):
+                self.hide()
+                return True
+            if apply_btn and apply_btn.collidepoint(mp):
+                # perform save
+                self._saving = True
+                added, rejected = add_words_to_file(self.file_path, self.items, self.language)
+                self._progress = 100
+                # show status then close
+                state.status = f"Added {added} words. Rejected: {len(rejected)}"
+                refresh_words_counts()
+                self._saving = False
+                self.hide()
+                return True
+            return True
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+        if event.type == pygame.MOUSEMOTION and getattr(self, "_dragging_sb", False):
+            # dragging scrollbar
+            panel = self._panel_rect(W, H)
+            inp_rect = self._rects.get("input")
+            list_top = inp_rect.bottom + 12 if inp_rect else panel.y + 100
+            list_h = panel.bottom - list_top - 64
+            row_stride = self.ROW_H + 6
+            total_h = len(self.items) * row_stride
+            track, thumb = self._scrollbar_rects(panel, list_top, list_h, total_h)
+            if track and thumb:
+                new_y = event.pos[1] - self._drag_offset
+                max_thumb_y = track.y + track.height - thumb.height
+                ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+                self._scroll = max(0, min(self._max_scroll, int(ratio * self._max_scroll)))
+            return True
+        return True
+
+    def _set_active_field(self, key, cursor_pos=None):
+        self.active_field = key
+        value = self.input_text if key == "input" else ""
+        if cursor_pos is None:
+            cursor_pos = len(value)
+        self.cursor_pos = clamp(cursor_pos, 0, len(value))
+        self.cursor_blink_start = pygame.time.get_ticks()
+
+    def _scrollbar_rects(self, panel, list_top, list_h, total_h):
+        # returns (track, thumb) or (None, None)
+        self._max_scroll = max(0, total_h - list_h)
+        if total_h <= list_h:
+            return None, None
+        track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
+        ratio = list_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+        return track, pygame.Rect(track.x, thumb_y, track.width, thumb_h)
+
+    def _panel_rect(self, W, H):
+        pw = min(700, W - 80)
+        ph = min(420, H - 80)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        surface.blit(overlay, (0, 0))
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, BORDER, radius=12)
+        blit_text(surface, self.title, FONT_LG, TEXT, panel.x + 20, panel.y + 14)
+
+        # Input field (styled like other modals)
+        inp_rect = pygame.Rect(panel.x + 20, panel.y + 64, panel.width - 40, 34)
+        active = self.active_field == "input"
+        draw_panel(surface, inp_rect, BLUE_BG if active else PANEL2, ACCENT if active else BORDER, radius=8)
+        txt = self.input_text if self.input_text else "Type a word and press Enter"
+        color = TEXT if self.input_text else MUTED
+        blit_text(surface, txt, FONT_SM, color, inp_rect.x + 8, inp_rect.centery, anchor="midleft")
+        # draw cursor when active
+        if active:
+            cursor_pos = clamp(getattr(self, "cursor_pos", 0), 0, len(self.input_text))
+            prefix = self.input_text[:cursor_pos]
+            display_text = fit_text_with_ellipsis(self.input_text, FONT_SM, inp_rect.width - 24)
+            if display_text != self.input_text and cursor_pos > len(display_text):
+                visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                cursor_x = inp_rect.x + 8 + FONT_SM.size(visible_prefix)[0]
+            else:
+                cursor_x = inp_rect.x + 8 + FONT_SM.size(prefix)[0]
+            if ((pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0)) // 500) % 2 == 0:
+                pygame.draw.line(surface, ACCENT, (cursor_x, inp_rect.y + 6), (cursor_x, inp_rect.bottom - 6), 2)
+        self._rects["input"] = inp_rect
+
+        # Items list
+        list_top = inp_rect.bottom + 12
+        list_h = panel.bottom - list_top - 64
+        clip = pygame.Rect(panel.x + 20, list_top, panel.width - 40, list_h)
+        old_clip = surface.get_clip()
+        surface.set_clip(clip)
+        row_stride = self.ROW_H + 6
+        total_h = len(self.items) * row_stride
+        self._max_scroll = max(0, total_h - list_h)
+        y = list_top - self._scroll
+        for i, w in enumerate(self.items):
+            r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
+            pygame.draw.rect(surface, PANEL2, r, border_radius=8)
+            pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
+            blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+            y += row_stride
+        surface.set_clip(old_clip)
+
+        # Scrollbar
+        if total_h > list_h:
+            track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, track, 1, border_radius=4)
+            ratio = list_h / total_h
+            thumb_h = max(20, int(track.height * ratio))
+            thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+            thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_h)
+            pygame.draw.rect(surface, ACCENT, thumb, border_radius=4)
+            # store scrollbar rects for interaction
+            self._rects["_sb_track"] = track
+            self._rects["_sb_thumb"] = thumb
+
+        # Buttons
+        apply_btn = pygame.Rect(panel.x + 20, panel.bottom - 48, 120, 32)
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 48, 72, 32)
+        self._rects["apply"] = apply_btn
+        self._rects["close"] = close_btn
+        draw_button(surface, apply_btn, "Apply", bg=TEAL, fg=WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(surface, close_btn, "Close", bg=RED, fg=WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+
+
+def is_english_letters_only(word: str) -> bool:
+    if not word:
+        return False
+    allowed = {chr(c) for c in range(ord("a"), ord("z") + 1)}
+    allowed |= {ch.upper() for ch in allowed}
+    return all(ch in allowed for ch in word)
+
+
+def is_greek_letters_only(word: str) -> bool:
+    if not word:
+        return False
+    # Build allowed greek characters from GREEK_GROUPS
+    allowed = set()
+    for g in GREEK_GROUPS:
+        for ch in g:
+            allowed.add(ch)
+    return all(ch in allowed for ch in word)
+
+
+def add_words_to_file(path, words, language):
+    """Add validated words to text file at path; return (added_count, rejected_list)"""
+    if not path:
+        return 0, list(words)
+    try:
+        existing = set(load_words(path))
+    except Exception:
+        existing = set()
+
+    to_add = []
+    rejected = []
+    for w in words:
+        if not w:
+            continue
+        # basic normalization
+        ww = w.strip()
+        if language == "english":
+            if not is_english_letters_only(ww):
+                rejected.append(ww)
+                continue
+            if ww.isupper():
+                ww = ww.lower()
+        elif language == "greek":
+            if not is_greek_letters_only(ww):
+                rejected.append(ww)
+                continue
+        else:
+            # both: accept either english or greek
+            if is_english_letters_only(ww):
+                if ww.isupper():
+                    ww = ww.lower()
+            elif not is_greek_letters_only(ww):
+                rejected.append(ww)
+                continue
+
+        if ww not in existing:
+            existing.add(ww)
+            to_add.append(ww)
+
+    # write back sorted (case-insensitive)
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            for w in sorted(existing, key=str.lower):
+                f.write(w + "\n")
+    except Exception:
+        # on error, consider all as rejected
+        return 0, words
+
+    return len(to_add), rejected
+
+
+def delete_words_from_file(path, words_to_delete):
+    if not path:
+        return 0
+    try:
+        existing = list(load_words(path))
+    except Exception:
+        existing = []
+    s = set(existing)
+    removed = 0
+    for w in words_to_delete:
+        if w in s:
+            s.remove(w)
+            removed += 1
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            for w in sorted(s, key=str.lower):
+                f.write(w + "\n")
+    except Exception:
+        return 0
+    return removed
+
+
+class DeleteWordsModal:
+    """Modal to search and delete words from a file."""
+    ROW_H = 32
+
+    def __init__(self):
+        self.visible = False
+        self.language = "greek"
+        self.file_path = None
+        self.title = "Delete Words"
+        self.search_text = ""
+        self.matches = []
+        self.selected = set()
+        self._scroll = 0
+        self._rects = {}
+        self.active_field = None
+        self.cursor_pos = 0
+        self.cursor_blink_start = pygame.time.get_ticks()
+        self._dragging_sb = False
+        self._drag_offset = 0
+        self._max_scroll = 0
+
+    def show(self, file_path, language):
+        self.visible = True
+        self.file_path = file_path
+        self.language = language
+        self.title = f"Delete Words from {os.path.basename(file_path) if file_path else 'file'}"
+        self.search_text = ""
+        self.matches = []
+        # keep previous selections if any, do not clear self.selected here
+        # make search field active immediately and enable text input
+        self._set_active_field("search")
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def hide(self):
+        self.visible = False
+        try:
+            pygame.key.start_text_input()
+        except Exception:
+            pass
+
+    def handle_event(self, event, W, H):
+        if not self.visible:
+            return False
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.hide()
+                return True
+            if self.active_field == "search":
+                if event.key == pygame.K_RETURN:
+                    # perform search
+                    all_words = load_words(self.file_path) if self.file_path else []
+                    q = self.search_text.strip().casefold()
+                    if q:
+                        found = [w for w in all_words if q in w.casefold()]
+                    else:
+                        found = []
+                    # ensure selected items remain in the list
+                    sel_in_file = [w for w in self.selected if w in all_words]
+                    # build matches: selected first, then found excluding selected
+                    self.matches = sel_in_file + [w for w in found if w not in self.selected]
+                    # reset scroll to top
+                    self._scroll = 0
+                    return True
+                if event.key == pygame.K_BACKSPACE:
+                    if self.cursor_pos > 0:
+                        self.search_text = (
+                            self.search_text[: self.cursor_pos - 1]
+                            + self.search_text[self.cursor_pos :]
+                        )
+                        self.cursor_pos = max(0, self.cursor_pos - 1)
+                    return True
+                if event.key == pygame.K_DELETE:
+                    if self.cursor_pos < len(self.search_text):
+                        self.search_text = (
+                            self.search_text[: self.cursor_pos]
+                            + self.search_text[self.cursor_pos + 1 :]
+                        )
+                    return True
+                if event.key == pygame.K_LEFT:
+                    self.cursor_pos = max(0, self.cursor_pos - 1)
+                    return True
+                if event.key == pygame.K_RIGHT:
+                    self.cursor_pos = min(len(self.search_text), self.cursor_pos + 1)
+                    return True
+                if event.key == pygame.K_HOME:
+                    self.cursor_pos = 0
+                    return True
+                if event.key == pygame.K_END:
+                    self.cursor_pos = len(self.search_text)
+                    return True
+        if event.type == pygame.TEXTINPUT and self.active_field == "search":
+            pre = self.search_text[: self.cursor_pos]
+            post = self.search_text[self.cursor_pos :]
+            self.search_text = pre + event.text + post
+            self.cursor_pos += len(event.text)
+            return True
+
+        # mouse wheel scrolling
+        if event.type in (pygame.MOUSEWHEEL, pygame.MOUSEBUTTONDOWN):
+            wheel_y = 0
+            if event.type == pygame.MOUSEWHEEL:
+                wheel_y = event.y
+            elif event.type == pygame.MOUSEBUTTONDOWN and event.button in (4, 5):
+                wheel_y = 1 if event.button == 4 else -1
+            if wheel_y:
+                self._scroll = clamp(self._scroll - wheel_y * 20, 0, self._max_scroll)
+                return True
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            mp = event.pos
+            panel = self._panel_rect(W, H)
+            if not panel.collidepoint(mp):
+                self.hide()
+                return True
+            inp_rect = self._rects.get("input")
+            if inp_rect and inp_rect.collidepoint(mp):
+                # set cursor position based on click
+                value = self.search_text
+                target_x = mp[0] - (inp_rect.x + 8)
+                cursor_pos = 0
+                for i in range(len(value) + 1):
+                    if FONT_SM.size(value[:i])[0] >= target_x:
+                        cursor_pos = i
+                        break
+                    cursor_pos = i
+                self._set_active_field("search", cursor_pos)
+                return True
+
+            apply_btn = self._rects.get("apply")
+            close_btn = self._rects.get("close")
+            # scrollbar thumb handling
+            list_top = inp_rect.bottom + 12 if inp_rect else panel.y + 100
+            list_h = panel.bottom - list_top - 64
+            row_stride = self.ROW_H + 6
+            total_h = len(self.matches) * row_stride
+            track, thumb = self._scrollbar_rects(panel, list_top, list_h, total_h)
+            if thumb and thumb.collidepoint(mp):
+                self._dragging_sb = True
+                self._drag_offset = mp[1] - thumb.y
+                return True
+
+            if close_btn and close_btn.collidepoint(mp):
+                self.hide()
+                return True
+            if apply_btn and apply_btn.collidepoint(mp):
+                # delete selected
+                deleted = delete_words_from_file(self.file_path, list(self.selected))
+                state.status = f"Deleted {deleted} words"
+                refresh_words_counts()
+                self.hide()
+                return True
+            # check clicks on match rows
+            list_top = panel.y + 108
+            row_stride = self.ROW_H + 6
+            y = list_top - self._scroll
+            for i, w in enumerate(self.matches):
+                r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
+                if r.collidepoint(mp):
+                    if w in self.selected:
+                        self.selected.remove(w)
+                    else:
+                        self.selected.add(w)
+                    # keep the selected item in matches even after new searches
+                    return True
+                y += row_stride
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_sb = False
+        if event.type == pygame.MOUSEMOTION and getattr(self, "_dragging_sb", False):
+            panel = self._panel_rect(W, H)
+            inp_rect = self._rects.get("input")
+            list_top = inp_rect.bottom + 12 if inp_rect else panel.y + 100
+            list_h = panel.bottom - list_top - 64
+            row_stride = self.ROW_H + 6
+            total_h = len(self.matches) * row_stride
+            track, thumb = self._scrollbar_rects(panel, list_top, list_h, total_h)
+            if track and thumb:
+                new_y = event.pos[1] - self._drag_offset
+                max_thumb_y = track.y + track.height - thumb.height
+                ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
+                self._scroll = max(0, min(self._max_scroll, int(ratio * self._max_scroll)))
+            return True
+        return True
+
+    def _panel_rect(self, W, H):
+        pw = min(700, W - 80)
+        ph = min(520, H - 80)
+        return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _set_active_field(self, key, cursor_pos=None):
+        self.active_field = key
+        value = self.search_text if key == "search" else ""
+        if cursor_pos is None:
+            cursor_pos = len(value)
+        self.cursor_pos = clamp(cursor_pos, 0, len(value))
+        self.cursor_blink_start = pygame.time.get_ticks()
+
+    def _scrollbar_rects(self, panel, list_top, list_h, total_h):
+        # returns (track, thumb) or (None, None)
+        self._max_scroll = max(0, total_h - list_h)
+        if total_h <= list_h:
+            return None, None
+        track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
+        ratio = list_h / total_h
+        thumb_h = max(20, int(track.height * ratio))
+        thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+        return track, pygame.Rect(track.x, thumb_y, track.width, thumb_h)
+
+    def draw(self, surface, W, H, mouse_pos):
+        if not self.visible:
+            return
+        overlay = pygame.Surface((W, H), pygame.SRCALPHA)
+        overlay.fill((0, 0, 0, 160))
+        surface.blit(overlay, (0, 0))
+        panel = self._panel_rect(W, H)
+        draw_panel(surface, panel, PANEL, BORDER, radius=12)
+        blit_text(surface, self.title, FONT_LG, TEXT, panel.x + 20, panel.y + 14)
+
+        # Search field (styled like other input fields)
+        inp_rect = pygame.Rect(panel.x + 20, panel.y + 64, panel.width - 40, 34)
+        active = self.active_field == "search"
+        draw_panel(surface, inp_rect, BLUE_BG if active else PANEL2, ACCENT if active else BORDER, radius=8)
+        txt = self.search_text if self.search_text else "Type sequence and press Enter"
+        color = TEXT if self.search_text else MUTED
+        blit_text(surface, txt, FONT_SM, color, inp_rect.x + 8, inp_rect.centery, anchor="midleft")
+        # draw cursor when active
+        if active:
+            cursor_pos = clamp(getattr(self, "cursor_pos", 0), 0, len(self.search_text))
+            prefix = self.search_text[:cursor_pos]
+            display_text = fit_text_with_ellipsis(self.search_text, FONT_SM, inp_rect.width - 24)
+            if display_text != self.search_text and cursor_pos > len(display_text):
+                visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                cursor_x = inp_rect.x + 8 + FONT_SM.size(visible_prefix)[0]
+            else:
+                cursor_x = inp_rect.x + 8 + FONT_SM.size(prefix)[0]
+            if ((pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0)) // 500) % 2 == 0:
+                pygame.draw.line(surface, ACCENT, (cursor_x, inp_rect.y + 6), (cursor_x, inp_rect.bottom - 6), 2)
+        self._rects["input"] = inp_rect
+
+        # Matches list
+        list_top = inp_rect.bottom + 12
+        list_h = panel.bottom - list_top - 64
+        clip = pygame.Rect(panel.x + 20, list_top, panel.width - 40, list_h)
+        old_clip = surface.get_clip()
+        surface.set_clip(clip)
+        row_stride = self.ROW_H + 6
+        total_h = len(self.matches) * row_stride
+        self._max_scroll = max(0, total_h - list_h)
+        y = list_top - self._scroll
+        for w in self.matches:
+            r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
+            selected = w in self.selected
+            if selected:
+                # red selected style with X marker on the right
+                bg_color, bdr_color = RED_BG, RED_BDR
+                pygame.draw.rect(surface, bg_color, r, border_radius=8)
+                pygame.draw.rect(surface, bdr_color, r, 1, border_radius=8)
+                blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+                m = FONT_SM.render(special_chars["X"], True, TEXT)
+                surface.blit(m, m.get_rect(midright=(r.right - 8, r.centery)))
+            else:
+                pygame.draw.rect(surface, PANEL2, r, border_radius=8)
+                pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
+                blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+            y += row_stride
+        surface.set_clip(old_clip)
+
+        # Scrollbar
+        if total_h > list_h:
+            track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
+            pygame.draw.rect(surface, PANEL2, track, border_radius=4)
+            pygame.draw.rect(surface, BORDER, track, 1, border_radius=4)
+            ratio = list_h / total_h
+            thumb_h = max(20, int(track.height * ratio))
+            thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+            thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_h)
+            pygame.draw.rect(surface, ACCENT, thumb, border_radius=4)
+            self._rects["_sb_track"] = track
+            self._rects["_sb_thumb"] = thumb
+
+        # Buttons
+        apply_btn = pygame.Rect(panel.x + 20, panel.bottom - 48, 120, 32)
+        close_btn = pygame.Rect(panel.right - 96, panel.bottom - 48, 72, 32)
+        self._rects["apply"] = apply_btn
+        self._rects["close"] = close_btn
+        draw_button(surface, apply_btn, "Apply", bg=TEAL, fg=WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(surface, close_btn, "Close", bg=RED, fg=WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+
+
 class ShowStatisticsModal:
     STAT_ITEMS = [
         ("length", "Length"),
@@ -6901,8 +7555,34 @@ def render_file_row(mouse_pos):
         path_img = LINK_FONT_SM.render(short_path(path), True, ACCENT)
         path_rect = path_img.get_rect(topleft=(tx, by + 2))
         screen.blit(path_img, path_rect)
+        # plus/minus buttons under the path, left of the count (Pattern Hunt style)
+        btn_size = 14
+        plus_rect = pygame.Rect(tx, by + 20, btn_size, btn_size)
+        minus_rect = pygame.Rect(tx + btn_size + 6, by + 20, btn_size, btn_size)
+
+        plus_hover = plus_rect.collidepoint(mouse_pos)
+        minus_hover = minus_rect.collidepoint(mouse_pos)
+
+        pygame.draw.rect(
+            screen,
+            lighten(GREEN_BG, 18) if plus_hover else GREEN_BG,
+            plus_rect,
+            border_radius=4,
+        )
+        pygame.draw.rect(screen, GREEN_BDR, plus_rect, 1, border_radius=4)
+        blit_text(screen, "+", FONT_SM, GREEN, plus_rect.centerx, plus_rect.centery, anchor="center")
+
+        pygame.draw.rect(
+            screen,
+            lighten(RED_BG, 18) if minus_hover else RED_BG,
+            minus_rect,
+            border_radius=4,
+        )
+        pygame.draw.rect(screen, RED_BDR, minus_rect, 1, border_radius=4)
+        blit_text(screen, "-", FONT_SM, RED, minus_rect.centerx, minus_rect.centery, anchor="center")
+
         blit_text(
-            screen, f"{count} words", FONT_SM, MUTED, tx, by + 20, anchor="topleft"
+            screen, f"{count} words", FONT_SM, MUTED, tx + btn_size * 2 + 12, by + 20, anchor="topleft"
         )
         hover_rect = pygame.Rect(tx, by, 126, 36)
 
@@ -6928,7 +7608,7 @@ def render_file_row(mouse_pos):
             pygame.draw.rect(screen, BORDER, tip_rect, 1, border_radius=6)
             screen.blit(tip_img, tip_img.get_rect(center=tip_rect.center))
 
-        return br, path_rect
+        return br, path_rect, plus_rect, minus_rect
 
     # ── Column widths for equal spacing across the whole row ──
     action_col_w = 150
@@ -7038,13 +7718,13 @@ def render_file_row(mouse_pos):
 
     # ── Show Files buttons and paths ─────────────
 
-    sp_btn, sp_link = file_unit(
+    sp_btn, sp_link, sp_plus, sp_minus = file_unit(
         saveto_x, "Save to", state.results_file, state.results_count
     )
-    ef_btn, ef_link = file_unit(
+    ef_btn, ef_link, ef_plus, ef_minus = file_unit(
         english_x, "English", state.english_file, state.english_count
     )
-    gf_btn, gf_link = file_unit(greek_x, "Greek", state.greek_file, state.greek_count)
+    gf_btn, gf_link, gf_plus, gf_minus = file_unit(greek_x, "Greek", state.greek_file, state.greek_count)
 
     return (
         gf_btn,
@@ -7053,6 +7733,12 @@ def render_file_row(mouse_pos):
         ef_link,
         sp_btn,
         sp_link,
+        gf_plus,
+        gf_minus,
+        ef_plus,
+        ef_minus,
+        sp_plus,
+        sp_minus,
         theme_btn,
         sv_btn,
         translate_chk_rect,
@@ -7920,6 +8606,8 @@ if __name__ == "__main__":
     progress_modal = ProgressModal()
     enrichment_modal = EnrichmentModal()
     words_modal = ShowWordsModal()
+    add_modal = AddWordsModal()
+    delete_modal = DeleteWordsModal()
     stats_modal = ShowStatisticsModal()
     summary_modal = SummaryModal()
     dragging = None  # None | 'wl' | 'mp'
@@ -7958,6 +8646,12 @@ if __name__ == "__main__":
             ef_link,
             sp_btn,
             sp_link,
+            gf_plus,
+            gf_minus,
+            ef_plus,
+            ef_minus,
+            sp_plus,
+            sp_minus,
             theme_btn,
             sv_btn,
             translate_chk_rect,
@@ -7985,6 +8679,8 @@ if __name__ == "__main__":
         enrichment_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         stats_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         words_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        add_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
+        delete_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
         summary_modal.draw(screen, WIDTH, HEIGHT, mouse_pos)
 
         pygame.display.flip()
@@ -8015,6 +8711,12 @@ if __name__ == "__main__":
                 continue
 
             if words_modal.visible and words_modal.handle_event(event, WIDTH, HEIGHT):
+                continue
+
+            if add_modal.visible and add_modal.handle_event(event, WIDTH, HEIGHT):
+                continue
+
+            if delete_modal.visible and delete_modal.handle_event(event, WIDTH, HEIGHT):
                 continue
 
             if stats_modal.visible and stats_modal.handle_event(event, WIDTH, HEIGHT):
@@ -8138,6 +8840,20 @@ if __name__ == "__main__":
                             state.results_file = p
                             refresh_words_counts()
                             state.status = f"Save path: {os.path.basename(p)}"
+
+                    # Plus / Minus buttons for each file (add / delete words)
+                    elif gf_plus.collidepoint(mx, my):
+                        add_modal.show(state.greek_file, "greek")
+                    elif gf_minus.collidepoint(mx, my):
+                        delete_modal.show(state.greek_file, "greek")
+                    elif ef_plus.collidepoint(mx, my):
+                        add_modal.show(state.english_file, "english")
+                    elif ef_minus.collidepoint(mx, my):
+                        delete_modal.show(state.english_file, "english")
+                    elif sp_plus.collidepoint(mx, my):
+                        add_modal.show(state.results_file, "both")
+                    elif sp_minus.collidepoint(mx, my):
+                        delete_modal.show(state.results_file, "both")
                     elif sv_btn.collidepoint(mx, my):
                         do_save()
 
