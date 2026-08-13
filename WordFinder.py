@@ -4371,9 +4371,17 @@ class AddWordsModal:
         y = list_top - self._scroll
         for i, w in enumerate(self.items):
             r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
-            pygame.draw.rect(surface, PANEL2, r, border_radius=8)
-            pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
+            hovered = r.collidepoint(mouse_pos)
+            # hover effect: slightly highlighted background
+            if hovered:
+                pygame.draw.rect(surface, BLUE_BG, r, border_radius=8)
+                pygame.draw.rect(surface, ACCENT, r, 2, border_radius=8)
+            else:
+                pygame.draw.rect(surface, PANEL2, r, border_radius=8)
+                pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
             blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+            # store rect for potential interactions/hover lookup
+            self._rects[f"item_{i}"] = r
             y += row_stride
         surface.set_clip(old_clip)
 
@@ -4732,6 +4740,29 @@ class DeleteWordsModal:
                 pygame.draw.line(surface, ACCENT, (cursor_x, inp_rect.y + 6), (cursor_x, inp_rect.bottom - 6), 2)
         self._rects["input"] = inp_rect
 
+        # Selected groups (show chosen words grouped by file/category)
+        try:
+            greek_set = set(load_words(state.greek_file)) if state.greek_file else set()
+        except Exception:
+            greek_set = set()
+        try:
+            english_set = set(load_words(state.english_file)) if state.english_file else set()
+        except Exception:
+            english_set = set()
+        try:
+            results_set = set(load_words(state.results_file)) if state.results_file else set()
+        except Exception:
+            results_set = set()
+
+        groups = {"Greek": [], "English": [], "Save to": []}
+        for w in sorted(self.selected):
+            if w in greek_set:
+                groups["Greek"].append(w)
+            if w in english_set:
+                groups["English"].append(w)
+            if w in results_set:
+                groups["Save to"].append(w)
+
         # Matches list
         list_top = inp_rect.bottom + 12
         list_h = panel.bottom - list_top - 64
@@ -4742,21 +4773,34 @@ class DeleteWordsModal:
         total_h = len(self.matches) * row_stride
         self._max_scroll = max(0, total_h - list_h)
         y = list_top - self._scroll
-        for w in self.matches:
+        for idx, w in enumerate(self.matches):
             r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
             selected = w in self.selected
+            hovered = r.collidepoint(mouse_pos)
             if selected:
                 # red selected style with X marker on the right
                 bg_color, bdr_color = RED_BG, RED_BDR
-                pygame.draw.rect(surface, bg_color, r, border_radius=8)
-                pygame.draw.rect(surface, bdr_color, r, 1, border_radius=8)
+                # if hovered while selected, slightly change border
+                if hovered:
+                    pygame.draw.rect(surface, bg_color, r, border_radius=8)
+                    pygame.draw.rect(surface, DARK, r, 2, border_radius=8)
+                else:
+                    pygame.draw.rect(surface, bg_color, r, border_radius=8)
+                    pygame.draw.rect(surface, bdr_color, r, 1, border_radius=8)
                 blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
                 m = FONT_SM.render(special_chars["X"], True, TEXT)
                 surface.blit(m, m.get_rect(midright=(r.right - 8, r.centery)))
             else:
-                pygame.draw.rect(surface, PANEL2, r, border_radius=8)
-                pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
+                # normal row, show hover highlight
+                if hovered:
+                    pygame.draw.rect(surface, BLUE_BG, r, border_radius=8)
+                    pygame.draw.rect(surface, ACCENT, r, 2, border_radius=8)
+                else:
+                    pygame.draw.rect(surface, PANEL2, r, border_radius=8)
+                    pygame.draw.rect(surface, BORDER, r, 1, border_radius=8)
                 blit_text(surface, w, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+            # store rect for interaction/hover
+            self._rects[f"match_{idx}"] = r
             y += row_stride
         surface.set_clip(old_clip)
 
