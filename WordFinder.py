@@ -2617,6 +2617,8 @@ class EnrichmentModal:
         self.language = "greek"
         self.active_field = None
         self.fields = {}
+        self.cursor_pos = 0
+        self.cursor_blink_start = 0
         self.drafts = {}
         self._rects = {}
         self.word_scroll = 0
@@ -2640,6 +2642,8 @@ class EnrichmentModal:
         self.job_kind = job_kind
         self.active_field = None
         self.fields = {}
+        self.cursor_pos = 0
+        self.cursor_blink_start = pygame.time.get_ticks()
         self.drafts = {}
         self._rects = {}
         self.word_scroll = 0
@@ -2685,6 +2689,8 @@ class EnrichmentModal:
         self.word_index = 0
         self.active_field = None
         self.fields = {}
+        self.cursor_pos = 0
+        self.cursor_blink_start = pygame.time.get_ticks()
         self.drafts = {}
         self.source_data = {}
         self.picker_open = False
@@ -2695,6 +2701,59 @@ class EnrichmentModal:
         self.apply_total = 0
         self.apply_label = ""
         self.get_action = None
+
+    def _set_active_field(self, key, cursor_pos=None):
+        """Select a manual text field and place the text cursor in it."""
+        self.active_field = key
+        value = self.fields.get(key, "")
+        if cursor_pos is None:
+            cursor_pos = len(value)
+        self.cursor_pos = clamp(cursor_pos, 0, len(value))
+        self.cursor_blink_start = pygame.time.get_ticks()
+
+    def _manual_field_text(self):
+        if not self.active_field:
+            return ""
+        return self.fields.get(self.active_field, "")
+
+    def _reset_cursor_blink(self):
+        self.cursor_blink_start = pygame.time.get_ticks()
+
+    def _clipboard_text(self):
+        """Read plain text from the system clipboard, best-effort."""
+        try:
+            # pygame.scrap works when the platform provides a clipboard target.
+            if not pygame.scrap.get_init():
+                pygame.scrap.init()
+            raw = pygame.scrap.get(pygame.SCRAP_TEXT)
+            if raw:
+                if isinstance(raw, bytes):
+                    return raw.decode("utf-8", errors="replace").replace("\x00", "")
+                return str(raw)
+        except Exception:
+            pass
+
+        try:
+            root = get_tk_root()
+            root.update()
+            value = root.clipboard_get()
+            return str(value) if value is not None else ""
+        except Exception:
+            return ""
+
+    def _insert_text_at_cursor(self, value):
+        if not self.active_field or not value:
+            return False
+        value = "".join(ch for ch in value if ch.isprintable() and ch not in "\r\n\t")
+        if not value:
+            return False
+
+        text = self.fields.get(self.active_field, "")
+        pos = clamp(self.cursor_pos, 0, len(text))
+        self.fields[self.active_field] = text[:pos] + value + text[pos:]
+        self.cursor_pos = pos + len(value)
+        self._reset_cursor_blink()
+        return True
 
     def _path(self):
         return (
@@ -2841,7 +2900,7 @@ class EnrichmentModal:
                 ) or ""
 
             self.fields = {"translation": translation}
-            self.active_field = "translation"
+            self._set_active_field("translation")
             return
 
         self._seed_meaning_draft(word)
@@ -2854,7 +2913,7 @@ class EnrichmentModal:
             "ex2": slot.get("ex2", ""),
             "ex3": slot.get("ex3", ""),
         }
-        self.active_field = "pos"
+        self._set_active_field("pos")
 
     def _snapshot_current(self):
         word = self._current_word()
@@ -2988,7 +3047,7 @@ class EnrichmentModal:
             if self.stage == "manual":
                 if event.key == pygame.K_TAB:
                     if self.job_kind == "translation":
-                        self.active_field = "translation"
+                        self._set_active_field("translation")
                     else:
                         order = ["pos", "def", "ex1", "ex2", "ex3"]
                         idx = (
@@ -2996,7 +3055,7 @@ class EnrichmentModal:
                             if self.active_field in order
                             else 0
                         )
-                        self.active_field = order[(idx + 1) % len(order)]
+                        self._set_active_field(order[(idx + 1) % len(order)])
                     return True
 
                 if event.key == pygame.K_RETURN:
@@ -3018,19 +3077,54 @@ class EnrichmentModal:
                     )
                     return True
 
-                if event.key == pygame.K_BACKSPACE and self.active_field:
-                    self.fields[self.active_field] = self.fields.get(
-                        self.active_field, ""
-                    )[:-1]
-                    return True
-
-                if event.unicode and self.active_field:
-                    ch = event.unicode
-                    if ch.isprintable():
-                        self.fields[self.active_field] = (
-                            self.fields.get(self.active_field, "") + ch
-                        )
+                if self.active_field:
+                    text = self._manual_field_text()
+                    if event.key == pygame.K_LEFT:
+                        self.cursor_pos = max(0, self.cursor_pos - 1)
+                        self._reset_cursor_blink()
                         return True
+
+                    if event.key == pygame.K_RIGHT:
+                        self.cursor_pos = min(len(text), self.cursor_pos + 1)
+                        self._reset_cursor_blink()
+                        return True
+
+                    if event.key == pygame.K_HOME:
+                        self.cursor_pos = 0
+                        self._reset_cursor_blink()
+                        return True
+
+                    if event.key == pygame.K_END:
+                        self.cursor_pos = len(text)
+                        self._reset_cursor_blink()
+                        return True
+
+                    if event.key == pygame.K_BACKSPACE:
+                        if self.cursor_pos > 0:
+                            self.fields[self.active_field] = (
+                                text[: self.cursor_pos - 1] + text[self.cursor_pos :]
+                            )
+                            self.cursor_pos -= 1
+                        self._reset_cursor_blink()
+                        return True
+
+                    if event.key == pygame.K_DELETE:
+                        if self.cursor_pos < len(text):
+                            self.fields[self.active_field] = (
+                                text[: self.cursor_pos] + text[self.cursor_pos + 1 :]
+                            )
+                        self._reset_cursor_blink()
+                        return True
+
+                    if event.key == pygame.K_v and (event.mod & pygame.KMOD_CTRL):
+                        self._insert_text_at_cursor(self._clipboard_text())
+                        return True
+
+                    if event.unicode:
+                        ch = event.unicode
+                        if ch.isprintable():
+                            self._insert_text_at_cursor(ch)
+                            return True
 
         if (
             event.type == pygame.MOUSEWHEEL
@@ -3101,7 +3195,15 @@ class EnrichmentModal:
 
                 for key, r in self._rects.get("fields", {}).items():
                     if r.collidepoint(event.pos):
-                        self.active_field = key
+                        value = self.fields.get(key, "")
+                        target_x = event.pos[0] - (r.x + 8)
+                        cursor_pos = 0
+                        for i in range(len(value) + 1):
+                            if FONT_SM.size(value[:i])[0] >= target_x:
+                                cursor_pos = i
+                                break
+                            cursor_pos = i
+                        self._set_active_field(key, cursor_pos)
                         return True
 
                 apply_btn = self._rects.get("apply")
@@ -3214,6 +3316,27 @@ class EnrichmentModal:
             text = self.fields.get(key, "")
             txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 24)
             blit_text(surface, txt, FONT_SM, TEXT, r.x + 8, r.centery, anchor="midleft")
+
+            if active:
+                cursor_pos = clamp(self.cursor_pos, 0, len(text))
+                prefix = text[:cursor_pos]
+                # Keep the visible cursor near the end of the field when the
+                # text is longer than the one-line display area.
+                display_text = fit_text_with_ellipsis(text, FONT_SM, r.width - 24)
+                if display_text != text and cursor_pos > len(display_text):
+                    visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                    cursor_x = r.x + 8 + FONT_SM.size(visible_prefix)[0]
+                else:
+                    cursor_x = r.x + 8 + FONT_SM.size(prefix)[0]
+
+                if ((pygame.time.get_ticks() - self.cursor_blink_start) // 500) % 2 == 0:
+                    pygame.draw.line(
+                        surface,
+                        ACCENT,
+                        (cursor_x, r.y + 6),
+                        (cursor_x, r.bottom - 6),
+                        2,
+                    )
 
             if self._field_is_dirty(self._current_word(), key):
                 tick = FONT_SM.render(special_chars["[OK]"], True, GREEN)
