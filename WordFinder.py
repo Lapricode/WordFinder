@@ -7655,8 +7655,8 @@ def render_file_row(mouse_pos):
         screen.blit(path_img, path_rect)
         # plus/minus buttons under the path, left of the count (Pattern Hunt style)
         btn_size = 14
-        plus_rect = pygame.Rect(tx, by + 20, btn_size, btn_size)
-        minus_rect = pygame.Rect(tx + btn_size + 6, by + 20, btn_size, btn_size)
+        plus_rect = pygame.Rect(tx, by + 22, btn_size, btn_size)
+        minus_rect = pygame.Rect(tx + btn_size + 6, by + 22, btn_size, btn_size)
 
         plus_hover = plus_rect.collidepoint(mouse_pos)
         minus_hover = minus_rect.collidepoint(mouse_pos)
