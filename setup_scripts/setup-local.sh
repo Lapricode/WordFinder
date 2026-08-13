@@ -18,8 +18,8 @@ if [ ! -f words/english_dictionary.json ]; then
     gzip -dk words/english_dictionary.json.gz
 fi
 
-# Keep local .txt dictionary changes out of Git status.
-echo "Configuring local words and dictionary files..."
+# Keep local .txt and .json words files changes out of Git status.
+echo "Configuring local words files..."
 git ls-files 'words/*.txt' -z | xargs -0 git update-index --skip-worktree
 git ls-files 'words/*.json' -z | xargs -0 git update-index --skip-worktree
 

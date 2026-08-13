@@ -14,8 +14,8 @@ if (-not (Test-Path "words\english_dictionary.json")) {
     tar -xzf "words\english_dictionary.json.gz"
 }
 
-# Keep local .txt dictionary changes out of Git status.
-Write-Host "Configuring local words and dictionary files..."
+# Keep local .txt and .json files changes out of Git status.
+Write-Host "Configuring local words files..."
 git ls-files "words/*.txt" | ForEach-Object {
     git update-index --skip-worktree $_
 }
