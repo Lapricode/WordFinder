@@ -4520,6 +4520,11 @@ class DeleteWordsModal:
         self._dragging_sb = False
         self._drag_offset = 0
         self._max_scroll = 0
+        # Cache of loaded word-sets for quick membership checks while drawing
+        # Keys: 'greek', 'english', 'results' -> set(words)
+        self._file_sets = {}
+        # Track mtimes to avoid unnecessary reloads
+        self._file_mtimes = {}
 
     def show(self, file_path, language):
         self.visible = True
@@ -4535,6 +4540,13 @@ class DeleteWordsModal:
             pygame.key.start_text_input()
         except Exception:
             pass
+        # preload commonly used word-sets once to avoid per-frame disk IO
+        try:
+            self._load_file_sets()
+        except Exception:
+            # non-fatal: continue without cache
+            self._file_sets = {}
+            self._file_mtimes = {}
 
     def hide(self):
         self.visible = False
@@ -4654,10 +4666,15 @@ class DeleteWordsModal:
                 self.hide()
                 return True
             # check clicks on match rows
-            list_top = panel.y + 108
+            list_top = inp_rect.bottom + 12 if inp_rect else panel.y + 100
             row_stride = self.ROW_H + 6
-            y = list_top - self._scroll
-            for i, w in enumerate(self.matches):
+            list_h = panel.bottom - list_top - 64
+            # Only check visible rows to avoid iterating the whole list
+            first_idx = max(0, int(self._scroll // row_stride))
+            visible_count = int(list_h // row_stride) + 3
+            last_idx = min(len(self.matches), first_idx + visible_count)
+            y = list_top - self._scroll + first_idx * row_stride
+            for i, w in enumerate(self.matches[first_idx:last_idx], start=first_idx):
                 r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
                 if r.collidepoint(mp):
                     if w in self.selected:
@@ -4689,6 +4706,32 @@ class DeleteWordsModal:
         pw = min(700, W - 80)
         ph = min(520, H - 80)
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
+
+    def _load_file_sets(self):
+        """Load greek/english/results files into sets and cache them, skipping reload if mtime unchanged."""
+        files = {
+            "greek": getattr(state, "greek_file", None),
+            "english": getattr(state, "english_file", None),
+            "results": getattr(state, "results_file", None),
+        }
+        for key, path in files.items():
+            if not path:
+                self._file_sets[key] = set()
+                self._file_mtimes[key] = None
+                continue
+            try:
+                mtime = os.path.getmtime(path)
+            except Exception:
+                mtime = None
+            if self._file_mtimes.get(key) == mtime and key in self._file_sets:
+                # cached and unchanged
+                continue
+            try:
+                words = set(load_words(path))
+            except Exception:
+                words = set()
+            self._file_sets[key] = words
+            self._file_mtimes[key] = mtime
 
     def _set_active_field(self, key, cursor_pos=None):
         self.active_field = key
@@ -4741,18 +4784,17 @@ class DeleteWordsModal:
         self._rects["input"] = inp_rect
 
         # Selected groups (show chosen words grouped by file/category)
+        # Use cached file sets to avoid per-frame disk IO; ensure cache is loaded.
         try:
-            greek_set = set(load_words(state.greek_file)) if state.greek_file else set()
+            if not self._file_sets:
+                self._load_file_sets()
         except Exception:
-            greek_set = set()
-        try:
-            english_set = set(load_words(state.english_file)) if state.english_file else set()
-        except Exception:
-            english_set = set()
-        try:
-            results_set = set(load_words(state.results_file)) if state.results_file else set()
-        except Exception:
-            results_set = set()
+            # fallback to empty sets
+            self._file_sets = {}
+            self._file_mtimes = {}
+        greek_set = self._file_sets.get("greek", set())
+        english_set = self._file_sets.get("english", set())
+        results_set = self._file_sets.get("results", set())
 
         groups = {"Greek": [], "English": [], "Save to": []}
         for w in sorted(self.selected):
@@ -4773,7 +4815,12 @@ class DeleteWordsModal:
         total_h = len(self.matches) * row_stride
         self._max_scroll = max(0, total_h - list_h)
         y = list_top - self._scroll
-        for idx, w in enumerate(self.matches):
+        # Only render visible rows to avoid heavy work when matches is large
+        first_idx = max(0, int(self._scroll // row_stride))
+        visible_count = int(list_h // row_stride) + 3
+        last_idx = min(len(self.matches), first_idx + visible_count)
+        y = list_top - self._scroll + first_idx * row_stride
+        for idx, w in enumerate(self.matches[first_idx:last_idx], start=first_idx):
             r = pygame.Rect(panel.x + 26, y, panel.width - 52 - 12, self.ROW_H)
             selected = w in self.selected
             hovered = r.collidepoint(mouse_pos)
