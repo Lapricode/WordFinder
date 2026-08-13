@@ -37,23 +37,6 @@ Word Finder is a desktop word-filtering app for solving word games and experimen
   </tr>
 </table>
 
-## Features
-
-- **Letter Match** mode for slot-based filtering, with four input modes per slot: Valid, Invalid, Exist, and Absent
-- **Pattern Hunt** mode for grid-based filtering: a 4×4 grid of Start / Inner / Middle / End rows against Valid / Invalid / Exist / Absent columns
-- Greek and English dictionary support
-- Case-aware English matching and accent-aware Greek matching
-- Per-word status coloring in the results panel (e.g. translated, missing translation, missing meaning) that can be toggled on or off
-- Save filtered results to any custom text file
-- **Translate** current results and save translations into the app's JSON data files
-- **Get Meaning** for current results and save WordNet-style meanings for English words, with **Show Translation** / **Show Meaning** checkboxes that control what appears on hover in both the results panel and the Show Words popup
-- Live progress modal for translation and meaning jobs, with per-word progress output showing the processed word and its result
-- **Slots Review** / **Patterns Review** popup summarizing all current constraints for the active mode, with **Copy** (to the system clipboard) and **Close** buttons
-- **Show Words** popup: browse the current result list with Start-letter and Length filters, inline translation/first-definition text per word, full hover detail (all saved senses, respecting the Show Translation/Show Meaning checkboxes), and a **→ Results** button to send the filtered list back into the results panel
-- **Show Statistics** popup: bar charts over the current results (length, letters, letter position, vowel ratio, unique letters, first/last letter, n-grams), sortable and switchable between vertical/horizontal layout; every bar (including its value label, so even very small bars stay clickable) opens a Show Words-style popup listing exactly the words behind it
-- Light/Dark theme toggle
-- Built with a PyGame interface and Tkinter file dialogs
-
 ## Requirements
 
 - Python 3.10+ recommended
@@ -125,6 +108,23 @@ To run the app, execute the command below:
 ```bash
 python WordFinder.py
 ```
+
+## Features
+
+- **Letter Match** mode for slot-based filtering, with four input modes per slot: Valid, Invalid, Exist, and Absent
+- **Pattern Hunt** mode for grid-based filtering: a 4×4 grid of Start / Inner / Middle / End rows against Valid / Invalid / Exist / Absent columns
+- Greek and English dictionary support
+- Case-aware English matching and accent-aware Greek matching
+- Per-word status coloring in the results panel (e.g. translated, missing translation, missing meaning) that can be toggled on or off
+- Save filtered results to any custom text file
+- **Translate** current results and save translations into the app's JSON data files
+- **Get Meaning** for current results and save WordNet-style meanings for English words, with **Show Translation** / **Show Meaning** checkboxes that control what appears on hover in both the results panel and the Show Words popup
+- Live progress modal for translation and meaning jobs, with per-word progress output showing the processed word and its result
+- **Slots Review** / **Patterns Review** popup summarizing all current constraints for the active mode, with **Copy** (to the system clipboard) and **Close** buttons
+- **Show Words** popup: browse the current result list with Start-letter and Length filters, inline translation/first-definition text per word, full hover detail (all saved senses, respecting the Show Translation/Show Meaning checkboxes), and a **→ Results** button to send the filtered list back into the results panel
+- **Show Statistics** popup: bar charts over the current results (length, letters, letter position, vowel ratio, unique letters, first/last letter, n-grams), sortable and switchable between vertical/horizontal layout; every bar (including its value label, so even very small bars stay clickable) opens a Show Words-style popup listing exactly the words behind it
+- Light/Dark theme toggle
+- Built with a PyGame interface and Tkinter file dialogs
 
 ## Word Lists
 
