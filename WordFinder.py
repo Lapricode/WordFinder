@@ -1063,7 +1063,17 @@ _NLTK_READY = False
 _TRANSLATOR_CACHE = {}
 _meanings_cache = {}  # path -> {"mtime": float, "data": dict}
 _results_legend_rects = {"toggle": None, "items": {}}
-_results_action_rects = {"show_words": None, "show_stats": None, "keyboard": None}
+_results_action_rects = {
+    "show_words": None,
+    "show_stats": None,
+    "keyboard": None,
+    "per_row_minus": None,
+    "per_row_plus": None,
+}
+_results_scroll_rects = {
+    "grid": None,
+    "panel": None,
+}
 _results_keyboard_rects = {"panel": None, "keys": [], "controls": {}}
 ENRICHMENT_SAVE_EVERY_WORDS = 10  # 1 = save every word, higher = faster
 
@@ -1513,9 +1523,11 @@ def status_colors(status):
 
 # ─── Layout constants ─────────────────────────────────────────────
 MAX_WORD_LENGTH = 35
-MAX_MAX_PREVIEW = 100
+MAX_MAX_PREVIEW = 300
 PAD = 20
 GAP = 20
+MIN_RESULTS_PER_ROW = 1
+MAX_RESULTS_PER_ROW = 20
 
 H_HEADER = 65  # taller to fit two-line title
 H_CTRL = 90
@@ -6291,8 +6303,9 @@ class AppState:
     def __init__(self):
         self.lm_word_length = 5  # Letter Match's word length
         self.ph_word_length = 5  # Pattern Hunt's word length (used when not "All")
-        self.max_preview = MAX_MAX_PREVIEW // 4
+        self.max_preview = 25
         self.preview_start = 0
+        self.results_per_row = 5  # number of word buttons per row (1-20)
         self.input_scope = "single"
         self.greek_count = 0
         self.english_count = 0
@@ -8363,6 +8376,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
 
     panel = pygame.Rect(PAD, y0, WIDTH - 2 * PAD, h)
     draw_panel(screen, panel, PANEL, BORDER, radius=12)
+    _results_scroll_rects["panel"] = panel
 
     progress_h = draw_search_progress_bar(screen, panel)
 
@@ -8572,11 +8586,16 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         return prev_rect, next_rect
 
     grid_y = panel.y + 34 + progress_h
-    cols = max(1, (panel.width - 2 * PAD) // 250)
-    cw = (panel.width - 2 * PAD - (cols - 1) * GAP) // cols
+    per_row = clamp(state.results_per_row, MIN_RESULTS_PER_ROW, MAX_RESULTS_PER_ROW)
+    cols = per_row
+    cw = max(30, (panel.width - 2 * PAD - (cols - 1) * GAP) // cols)
     ch_h = 26
+    row_h = ch_h + 4
 
     grid_bottom = (keyboard_top - 8) if state.keyboard_on else (panel.bottom - 8)
+    grid_h = max(0, grid_bottom - grid_y)
+
+    grid_rect = pygame.Rect(panel.x + PAD, grid_y, panel.width - 2 * PAD, grid_h)
 
     _hover_word_rect = None
 
@@ -8584,7 +8603,7 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         col = idx % cols
         row = idx // cols
         wx = panel.x + PAD + col * (cw + GAP)
-        wy = grid_y + row * (ch_h + 4)
+        wy = grid_y + row * row_h
         if wy + ch_h > grid_bottom:
             break
 
@@ -8629,6 +8648,55 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
             )
 
         _result_word_rects.append((word, wr))
+
+    # ── Words-per-row control (− / count / +) ───────────────────────────
+    # Placed left of the total/showing + prev/next nav group so they don't overlap.
+    rpr_h = nav_h
+    rpr_y = nav_y
+    rpr_minus_rect = pygame.Rect(group_x - 120, rpr_y, 20, rpr_h)
+    rpr_plus_rect = pygame.Rect(group_x - 35, rpr_y, 20, rpr_h)
+    rpr_label_rect = pygame.Rect(
+        rpr_minus_rect.right + 2,
+        rpr_y,
+        rpr_plus_rect.x - rpr_minus_rect.right - 4,
+        rpr_h,
+    )
+
+    draw_button(
+        screen,
+        rpr_minus_rect,
+        "-",
+        bg=PANEL2,
+        fg=TEXT,
+        radius=6,
+        hovered=rpr_minus_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+    draw_button(
+        screen,
+        rpr_plus_rect,
+        "+",
+        bg=PANEL2,
+        fg=TEXT,
+        radius=6,
+        hovered=rpr_plus_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
+    pygame.draw.rect(screen, PANEL2, rpr_label_rect, border_radius=6)
+    pygame.draw.rect(screen, BORDER, rpr_label_rect, 1, border_radius=6)
+    blit_text(
+        screen,
+        f"{per_row}/row",
+        FONT_SM,
+        MUTED,
+        rpr_label_rect.centerx,
+        rpr_label_rect.centery,
+        anchor="center",
+    )
+
+    _results_action_rects["per_row_minus"] = rpr_minus_rect
+    _results_action_rects["per_row_plus"] = rpr_plus_rect
+    _results_scroll_rects["grid"] = grid_rect
 
     # Draw zoom tooltip near mouse for hovered word
     if _hover_word_rect is not None:
@@ -8833,6 +8901,28 @@ if __name__ == "__main__":
                         dragging = "wl"
                     elif t2.collidepoint(mx, my) or k2.collidepoint(mx, my):
                         dragging = "mp"
+
+                    # Results words-per-row controls
+                    elif _results_action_rects.get(
+                        "per_row_minus"
+                    ) is not None and _results_action_rects["per_row_minus"].collidepoint(
+                        mx, my
+                    ):
+                        state.results_per_row = clamp(
+                            state.results_per_row - 1,
+                            MIN_RESULTS_PER_ROW,
+                            MAX_RESULTS_PER_ROW,
+                        )
+                    elif _results_action_rects.get(
+                        "per_row_plus"
+                    ) is not None and _results_action_rects["per_row_plus"].collidepoint(
+                        mx, my
+                    ):
+                        state.results_per_row = clamp(
+                            state.results_per_row + 1,
+                            MIN_RESULTS_PER_ROW,
+                            MAX_RESULTS_PER_ROW,
+                        )
 
                     # Finder mode button
                     elif finder_btn_rect.collidepoint(mx, my):
@@ -9199,6 +9289,20 @@ if __name__ == "__main__":
                         state.preview_start, 0, max(len(state.search_results) - 1, 0)
                     )
 
+            elif event.type == pygame.MOUSEWHEEL:
+                wheel_pos = pygame.mouse.get_pos()
+                results_panel_rect = _results_scroll_rects.get("panel")
+                if results_panel_rect and results_panel_rect.collidepoint(wheel_pos):
+                    # Scroll up (event.y > 0) = fewer words per row (bigger buttons)
+                    # Scroll down (event.y < 0) = more words per row (smaller buttons)
+                    step = 1 if event.y < 0 else (-1 if event.y > 0 else 0)
+                    if step:
+                        state.results_per_row = clamp(
+                            state.results_per_row + step,
+                            MIN_RESULTS_PER_ROW,
+                            MAX_RESULTS_PER_ROW,
+                        )
+
             elif event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_ESCAPE:
                     running = False
@@ -9340,6 +9444,22 @@ if __name__ == "__main__":
                             len(state.search_results) - 1,
                             state.preview_start + state.max_preview,
                         )
+
+                elif event.key == pygame.K_LEFTBRACKET:
+                    state.results_per_row = clamp(
+                        state.results_per_row - 1,
+                        MIN_RESULTS_PER_ROW,
+                        MAX_RESULTS_PER_ROW,
+                    )
+                    state.status = f"Words per row: {state.results_per_row}"
+
+                elif event.key == pygame.K_RIGHTBRACKET:
+                    state.results_per_row = clamp(
+                        state.results_per_row + 1,
+                        MIN_RESULTS_PER_ROW,
+                        MAX_RESULTS_PER_ROW,
+                    )
+                    state.status = f"Words per row: {state.results_per_row}"
 
                 elif event.key == pygame.K_i and (event.mod & pygame.KMOD_CTRL):
                     info_modal.show()
