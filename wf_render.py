@@ -1193,12 +1193,12 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
     counts = S.state.results_status_counts
 
     legend_items = [
-        ("ok", "ok"),
-        ("no_translation", f"no {special_chars['<>']}"),
-        ("no_meaning", f"no {special_chars['?']}"),
-        ("no_translation_no_meaning", "none"),
-        ("selected", f"{special_chars['[OK]']}"),
-        ("excluded", f"{special_chars['X']}"),
+        ("ok", "ok|"),
+        ("no_translation", f"no {special_chars['<>']}|"),
+        ("no_meaning", f"no {special_chars['?']}|"),
+        ("no_translation_no_meaning", "none|"),
+        ("selected", f"{special_chars['[OK]']}|"),
+        ("excluded", f"{special_chars['X']}|"),
     ]
 
     legend_y = panel.bottom - 14
