@@ -511,21 +511,22 @@ if __name__ == "__main__":
                             stats_modal.show(state.results_visible_words, state.language)
                             break
 
-                        # Results legend toggles
-                        if R._results_legend_rects.get(
-                            "toggle"
-                        ) is not None and R._results_legend_rects["toggle"].collidepoint(
-                            mx, my
-                        ):
+                        if R._results_action_rects.get("color") is not None and R._results_action_rects["color"].collidepoint(mx, my):
                             state.colorize_status = not state.colorize_status
                             break
 
+                        # Results legend toggles
                         clicked_legend = False
                         for status_key, rect in R._results_legend_rects.get(
                             "items", {}
                         ).items():
                             if rect.collidepoint(mx, my):
-                                if status_key in state.status_filters:
+                                if status_key in ("selected", "excluded"):
+                                    if status_key in state.selection_filters:
+                                        state.selection_filters.remove(status_key)
+                                    else:
+                                        state.selection_filters.add(status_key)
+                                elif status_key in state.status_filters:
                                     state.status_filters.remove(status_key)
                                 else:
                                     state.status_filters.add(status_key)

@@ -55,6 +55,7 @@ _results_legend_rects = {"toggle": None, "items": {}}
 _results_action_rects = {
     "show_words": None,
     "show_stats": None,
+    "color": None,
     "keyboard": None,
     "per_row_minus": None,
     "per_row_plus": None,
@@ -453,6 +454,7 @@ class AppState:
         )  # (lang, word) -> loaded json dict (lazy, per active_file)
         self.colorize_status = True
         self.status_filters = set(STATUS_KEYS)
+        self.selection_filters = {"selected", "excluded"}
 
         self.results_status_map = {}
         self.results_status_counts = Counter()
@@ -1296,15 +1298,35 @@ def rebuild_results_cache():
     state.results_status_map = status_map
     state.results_status_counts = counts
     state.results_visible_words = [
-        w for w in state.search_results if status_map.get(w) in state.status_filters
+        w for w in state.search_results
+        if (
+            status_map.get(w) in state.status_filters
+            or (
+                state.word_selections.get(w) == "save"
+                and "selected" in state.selection_filters
+            )
+            or (
+                state.word_selections.get(w) == "exclude"
+                and "excluded" in state.selection_filters
+            )
+        )
     ]
     state.results_cache_dirty = False
 
 def refresh_visible_results():
     state.results_visible_words = [
-        w
-        for w in state.search_results
-        if state.results_status_map.get(w) in state.status_filters
+        w for w in state.search_results
+        if (
+            state.results_status_map.get(w) in state.status_filters
+            or (
+                state.word_selections.get(w) == "save"
+                and "selected" in state.selection_filters
+            )
+            or (
+                state.word_selections.get(w) == "exclude"
+                and "excluded" in state.selection_filters
+            )
+        )
     ]
 
 def _display_alphabet(language: str):

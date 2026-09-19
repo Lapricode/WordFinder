@@ -14,26 +14,58 @@ from collections import Counter
 import wf_constants as C
 import wf_state as S
 from wf_constants import (
-    FONT_SM, FONT_MD, FONT_LG, FONT_XL, PAD, MAX_WORD_LENGTH, special_chars,
+    FONT_SM,
+    FONT_MD,
+    FONT_LG,
+    FONT_XL,
+    PAD,
+    MAX_WORD_LENGTH,
+    special_chars,
     status_colors,
 )
 from wf_ui_helpers import (
-    blit_text, draw_panel, draw_button, fit_text_with_ellipsis, lighten, _dim_color,
+    blit_text,
+    draw_panel,
+    draw_button,
+    fit_text_with_ellipsis,
+    lighten,
+    _dim_color,
     clamp,
 )
 from wf_translate import (
-    normalize_word, load_words, add_words_to_file, delete_words_from_file,
+    normalize_word,
+    load_words,
+    add_words_to_file,
+    delete_words_from_file,
 )
 from wf_state import (
-    build_summary_lines, copy_to_clipboard, get_tk_root,
-    do_translate_action, do_get_meaning_action,
-    get_target_words, get_word_status, get_word_translation, get_word_first_definition,
-    format_meaning_lines, format_progress_result_lines,
-    lookup_word_entry, _get_cached_json,
-    rebuild_results_cache, refresh_visible_results, refresh_words_counts,
-    save_manual_translation, save_manual_meaning, send_words_to_results,
-    _base_letter, _word_letters, _is_vowel, _estimate_syllables,
-    _stats_summary, _bucket_label, _top_ngrams, _display_alphabet,
+    build_summary_lines,
+    copy_to_clipboard,
+    get_tk_root,
+    do_translate_action,
+    do_get_meaning_action,
+    get_target_words,
+    get_word_status,
+    get_word_translation,
+    get_word_first_definition,
+    format_meaning_lines,
+    format_progress_result_lines,
+    lookup_word_entry,
+    _get_cached_json,
+    rebuild_results_cache,
+    refresh_visible_results,
+    refresh_words_counts,
+    save_manual_translation,
+    save_manual_meaning,
+    send_words_to_results,
+    _base_letter,
+    _word_letters,
+    _is_vowel,
+    _estimate_syllables,
+    _stats_summary,
+    _bucket_label,
+    _top_ngrams,
+    _display_alphabet,
 )
 
 # Modal instances created in the entrypoint but referenced by name inside other
@@ -71,10 +103,22 @@ class InfoModal:
             f"Four input modes (cycle with {special_chars['^']} {special_chars['v']} or click the pill toggle):",
             "body",
         ),
-        (f"Valid {special_chars['-']} the selected letter group must appear in that slot.", "bullet"),
-        (f"Invalid {special_chars['-']} the selected letter group must not appear in that slot.", "bullet"),
-        (f"Exist {special_chars['-']} the letter must appear somewhere in the word. Repeating a letter in Exist means it must occur multiple times.", "bullet"),
-        (f"Absent {special_chars['-']} the letter must not appear anywhere in the word. Each letter can appear at most once in the Absent area.", "bullet"),
+        (
+            f"Valid {special_chars['-']} the selected letter group must appear in that slot.",
+            "bullet",
+        ),
+        (
+            f"Invalid {special_chars['-']} the selected letter group must not appear in that slot.",
+            "bullet",
+        ),
+        (
+            f"Exist {special_chars['-']} the letter must appear somewhere in the word. Repeating a letter in Exist means it must occur multiple times.",
+            "bullet",
+        ),
+        (
+            f"Absent {special_chars['-']} the letter must not appear anywhere in the word. Each letter can appear at most once in the Absent area.",
+            "bullet",
+        ),
         ("", "gap"),
         ("Navigation:", "body"),
         (
@@ -121,15 +165,36 @@ class InfoModal:
             "body",
         ),
         ("Pattern matching rows:", "body"),
-        (f"Start {special_chars['-']} sequence must match the beginning of the word.", "bullet"),
-        (f"Inner {special_chars['-']} sequence may appear anywhere in the word.", "bullet"),
-        (f"Middle {special_chars['-']} sequence must appear strictly inside the word.", "bullet"),
-        (f"End {special_chars['-']} sequence must match the end of the word.", "bullet"),
+        (
+            f"Start {special_chars['-']} sequence must match the beginning of the word.",
+            "bullet",
+        ),
+        (
+            f"Inner {special_chars['-']} sequence may appear anywhere in the word.",
+            "bullet",
+        ),
+        (
+            f"Middle {special_chars['-']} sequence must appear strictly inside the word.",
+            "bullet",
+        ),
+        (
+            f"End {special_chars['-']} sequence must match the end of the word.",
+            "bullet",
+        ),
         ("Cell behavior:", "body"),
-        (f"Valid {special_chars['-']} at least one pattern in the cell must match.", "bullet"),
+        (
+            f"Valid {special_chars['-']} at least one pattern in the cell must match.",
+            "bullet",
+        ),
         (f"Invalid {special_chars['-']} no pattern in the cell may match.", "bullet"),
-        (f"Exist {special_chars['-']} every pattern in the cell must appear in the word.", "bullet"),
-        (f"Absent {special_chars['-']} every pattern in the cell must be absent from the word.", "bullet"),
+        (
+            f"Exist {special_chars['-']} every pattern in the cell must appear in the word.",
+            "bullet",
+        ),
+        (
+            f"Absent {special_chars['-']} every pattern in the cell must be absent from the word.",
+            "bullet",
+        ),
         ("", "gap"),
         ("Navigation:", "body"),
         (
@@ -206,13 +271,20 @@ class InfoModal:
             "bullet",
         ),
         (
-            f"Shift + / {special_chars['-']} increase/decrease word length. In Pattern Hunt, "
-            'holding at 1 and pressing Shift+- switches to "All"; from "All", Shift++ returns to 1.',
+            f"Shift+/- {special_chars['-']} increase/decrease word length. In Pattern Hunt, "
+            'holding at 1 and pressing Shift- switches to "All"; from "All", Shift+ returns to 1.',
             "bullet",
         ),
-        (f"Ctrl + / {special_chars['-']} increase/decrease max preview.", "bullet"),
         (
-            f"+ / {special_chars['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
+            f"Ctrl+/- {special_chars['-']} increase/decrease max preview.",
+            "bullet",
+        ),
+        (
+            f"]/[ increase/decrease words per raw in the results panel.",
+            "bullet",
+        ),
+        (
+            f"+/- {special_chars['-']} (Pattern Hunt only) add/remove a pattern slot in the current cell group.",
             "bullet",
         ),
         (
@@ -525,6 +597,7 @@ class InfoModal:
         if current:
             lines.append(current)
         return lines or [""]
+
 
 class ProgressModal:
     """Full-screen dimmed overlay showing progress of a running Translation /
@@ -874,6 +947,7 @@ class ProgressModal:
         if current:
             lines.append(current)
         return lines or [""]
+
 
 class EnrichmentModal:
     MAX_SENSES = 10
@@ -1585,7 +1659,9 @@ class EnrichmentModal:
             )
             text = self.fields.get(key, "")
             txt = fit_text_with_ellipsis(text, FONT_SM, r.width - 24)
-            blit_text(surface, txt, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft")
+            blit_text(
+                surface, txt, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft"
+            )
 
             if active:
                 cursor_pos = clamp(self.cursor_pos, 0, len(text))
@@ -1594,12 +1670,18 @@ class EnrichmentModal:
                 # text is longer than the one-line display area.
                 display_text = fit_text_with_ellipsis(text, FONT_SM, r.width - 24)
                 if display_text != text and cursor_pos > len(display_text):
-                    visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                    visible_prefix = (
+                        display_text[:-3]
+                        if display_text.endswith("...")
+                        else display_text
+                    )
                     cursor_x = r.x + 8 + FONT_SM.size(visible_prefix)[0]
                 else:
                     cursor_x = r.x + 8 + FONT_SM.size(prefix)[0]
 
-                if ((pygame.time.get_ticks() - self.cursor_blink_start) // 500) % 2 == 0:
+                if (
+                    (pygame.time.get_ticks() - self.cursor_blink_start) // 500
+                ) % 2 == 0:
                     pygame.draw.line(
                         surface,
                         C.ACCENT,
@@ -1612,11 +1694,7 @@ class EnrichmentModal:
                 tick = FONT_SM.render(special_chars["[OK]"], True, C.GREEN)
                 surface.blit(tick, tick.get_rect(midright=(r.right - 10, r.centery)))
 
-            if (
-                key in HOVER_POPUP_KEYS
-                and text.strip()
-                and r.collidepoint(mouse_pos)
-            ):
+            if key in HOVER_POPUP_KEYS and text.strip() and r.collidepoint(mouse_pos):
                 self._hover_field_key = key
 
             return r.bottom + 23
@@ -1631,9 +1709,7 @@ class EnrichmentModal:
             btn_w = (field_w - btn_gap * (self.MAX_SENSES - 1)) // self.MAX_SENSES
             btn_h = 30
             for i in range(self.MAX_SENSES):
-                r = pygame.Rect(
-                    left + i * (btn_w + btn_gap), sel_row_y, btn_w, btn_h
-                )
+                r = pygame.Rect(left + i * (btn_w + btn_gap), sel_row_y, btn_w, btn_h)
                 self._rects["senses"][i] = r
                 is_active = i == self.sense_index
                 has_def = self._slot_has_definition(word, i)
@@ -1799,9 +1875,10 @@ class EnrichmentModal:
                 ),
             ]
             for current, original in pairs:
-                if str(current).strip() != str(original).strip() and str(
-                    current
-                ).strip():
+                if (
+                    str(current).strip() != str(original).strip()
+                    and str(current).strip()
+                ):
                     return True
         return False
 
@@ -1850,6 +1927,7 @@ class EnrichmentModal:
             lines.append(current)
         return lines or [""]
 
+
 class ShowWordsModal:
     ROW_H = 40
     ROW_GAP = 5
@@ -1866,7 +1944,7 @@ class ShowWordsModal:
         self._drag_offset = 0
         self._max_scroll_cache = 0
 
-        self._picker_kind = None   # "letter" | "length" | None
+        self._picker_kind = None  # "letter" | "length" | None
         self._picker_open = False
         self._picker_scroll = {"letter": 0, "length": 0}
 
@@ -1956,17 +2034,23 @@ class ShowWordsModal:
         Returns:
             picker_rect, visible_option_rects, visible_count
         """
-        picker = pygame.Rect(selector_rect.x, selector_rect.bottom + 6, selector_rect.w, 470)
+        picker = pygame.Rect(
+            selector_rect.x, selector_rect.bottom + 6, selector_rect.w, 470
+        )
         row_h = 28
         gap = 4
         visible = max(1, (picker.height - 16) // (row_h + gap))
 
         kind = self._picker_kind
-        scroll_val = clamp(self._picker_scroll_value(kind), 0, max(0, len(options) - visible))
+        scroll_val = clamp(
+            self._picker_scroll_value(kind), 0, max(0, len(options) - visible)
+        )
         self._set_picker_scroll_value(kind, scroll_val)
 
         rects = []
-        for i, opt in enumerate(options[scroll_val : scroll_val + visible], start=scroll_val):
+        for i, opt in enumerate(
+            options[scroll_val : scroll_val + visible], start=scroll_val
+        ):
             r = pygame.Rect(
                 picker.x + 10,
                 picker.y + 8 + (i - scroll_val) * (row_h + gap),
@@ -2075,7 +2159,9 @@ class ShowWordsModal:
                     picker = self._rects.get("picker")
                     if picker and picker.collidepoint(mp):
                         letters, lengths = self._options()
-                        full_options = letters if self._picker_kind == "letter" else lengths
+                        full_options = (
+                            letters if self._picker_kind == "letter" else lengths
+                        )
                         visible = max(1, (picker.height - 16) // (28 + 4))
                         kind = self._picker_kind
                         cur = self._picker_scroll_value(kind)
@@ -2087,7 +2173,9 @@ class ShowWordsModal:
                         return True
 
                 if panel.collidepoint(mp):
-                    self._scroll = clamp(self._scroll - wheel_y * 20, 0, self._max_scroll)
+                    self._scroll = clamp(
+                        self._scroll - wheel_y * 20, 0, self._max_scroll
+                    )
                     return True
 
         return True
@@ -2165,7 +2253,9 @@ class ShowWordsModal:
         first_row = int(start // row_stride)
         y_off = start % row_stride
 
-        clip = pygame.Rect(panel.x + 20, list_top, panel.width - 40, list_bottom - list_top)
+        clip = pygame.Rect(
+            panel.x + 20, list_top, panel.width - 40, list_bottom - list_top
+        )
         old_clip = surface.get_clip()
         surface.set_clip(clip)
 
@@ -2193,7 +2283,11 @@ class ShowWordsModal:
             else:
                 bg_color, bdr_color = C.PANEL2, C.BORDER
 
-            draw_r = row.inflate(int(row.w * 0.015), int(row.h * 0.12)) if is_hovered else row
+            draw_r = (
+                row.inflate(int(row.w * 0.015), int(row.h * 0.12))
+                if is_hovered
+                else row
+            )
             if is_hovered:
                 bg_color = lighten(bg_color, 10)
                 bdr_color = lighten(bdr_color, 10)
@@ -2321,7 +2415,9 @@ class ShowWordsModal:
 
                 tip_w = min(max_w + pad * 2, W - 2 * PAD)
                 tip_h = total_h + pad * 2
-                tip_rect = pygame.Rect(mouse_pos[0] + 20, mouse_pos[1] + 10, tip_w, tip_h)
+                tip_rect = pygame.Rect(
+                    mouse_pos[0] + 20, mouse_pos[1] + 10, tip_w, tip_h
+                )
                 if tip_rect.right > W - PAD:
                     tip_rect.right = W - PAD
                 if tip_rect.bottom > H - PAD:
@@ -2344,7 +2440,9 @@ class ShowWordsModal:
         self._rects["picker_options"] = []
 
         if self._picker_open:
-            selector = letter_selector if self._picker_kind == "letter" else length_selector
+            selector = (
+                letter_selector if self._picker_kind == "letter" else length_selector
+            )
             options = letters if self._picker_kind == "letter" else lengths
 
             picker, option_rects, visible = self._picker_rects(selector, options)
@@ -2355,9 +2453,8 @@ class ShowWordsModal:
 
             for idx, opt, r in option_rects:
                 selected = (
-                    (self._picker_kind == "letter" and opt == self.letter_filter)
-                    or (self._picker_kind == "length" and opt == self.length_filter)
-                )
+                    self._picker_kind == "letter" and opt == self.letter_filter
+                ) or (self._picker_kind == "length" and opt == self.length_filter)
                 hovered = r.collidepoint(mouse_pos)
                 fill = C.BLUE_BG if selected else C.PANEL
                 border = C.ACCENT if selected else C.BORDER
@@ -2395,8 +2492,10 @@ class ShowWordsModal:
             lines.append(current)
         return lines or [""]
 
+
 class AddWordsModal:
     """Modal to add user-entered words to a chosen text file."""
+
     ROW_H = 32
 
     def __init__(self):
@@ -2421,7 +2520,9 @@ class AddWordsModal:
         self.visible = True
         self.file_path = file_path
         self.language = language
-        self.title = f"Add Words to {os.path.basename(file_path) if file_path else 'file'}"
+        self.title = (
+            f"Add Words to {os.path.basename(file_path) if file_path else 'file'}"
+        )
         self.input_text = ""
         self.items = []
         self._saving = False
@@ -2543,7 +2644,9 @@ class AddWordsModal:
             if apply_btn and apply_btn.collidepoint(mp):
                 # perform save
                 self._saving = True
-                added, rejected = add_words_to_file(self.file_path, self.items, self.language)
+                added, rejected = add_words_to_file(
+                    self.file_path, self.items, self.language
+                )
                 self._progress = 100
                 # show status then close
                 S.state.status = f"Added {added} words. Rejected: {len(rejected)}"
@@ -2567,7 +2670,9 @@ class AddWordsModal:
                 new_y = event.pos[1] - self._drag_offset
                 max_thumb_y = track.y + track.height - thumb.height
                 ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
-                self._scroll = max(0, min(self._max_scroll, int(ratio * self._max_scroll)))
+                self._scroll = max(
+                    0, min(self._max_scroll, int(ratio * self._max_scroll))
+                )
             return True
         return True
 
@@ -2587,7 +2692,9 @@ class AddWordsModal:
         track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
         ratio = list_h / total_h
         thumb_h = max(20, int(track.height * ratio))
-        thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * (self._scroll / max(1, self._max_scroll))
+        )
         return track, pygame.Rect(track.x, thumb_y, track.width, thumb_h)
 
     def _panel_rect(self, W, H):
@@ -2608,22 +2715,49 @@ class AddWordsModal:
         # Input field (styled like other modals)
         inp_rect = pygame.Rect(panel.x + 20, panel.y + 64, panel.width - 40, 34)
         active = self.active_field == "input"
-        draw_panel(surface, inp_rect, C.BLUE_BG if active else C.PANEL2, C.ACCENT if active else C.BORDER, radius=8)
+        draw_panel(
+            surface,
+            inp_rect,
+            C.BLUE_BG if active else C.PANEL2,
+            C.ACCENT if active else C.BORDER,
+            radius=8,
+        )
         txt = self.input_text if self.input_text else "Type a word and press Enter"
         color = C.TEXT if self.input_text else C.MUTED
-        blit_text(surface, txt, FONT_SM, color, inp_rect.x + 8, inp_rect.centery, anchor="midleft")
+        blit_text(
+            surface,
+            txt,
+            FONT_SM,
+            color,
+            inp_rect.x + 8,
+            inp_rect.centery,
+            anchor="midleft",
+        )
         # draw cursor when active
         if active:
             cursor_pos = clamp(getattr(self, "cursor_pos", 0), 0, len(self.input_text))
             prefix = self.input_text[:cursor_pos]
-            display_text = fit_text_with_ellipsis(self.input_text, FONT_SM, inp_rect.width - 24)
+            display_text = fit_text_with_ellipsis(
+                self.input_text, FONT_SM, inp_rect.width - 24
+            )
             if display_text != self.input_text and cursor_pos > len(display_text):
-                visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                visible_prefix = (
+                    display_text[:-3] if display_text.endswith("...") else display_text
+                )
                 cursor_x = inp_rect.x + 8 + FONT_SM.size(visible_prefix)[0]
             else:
                 cursor_x = inp_rect.x + 8 + FONT_SM.size(prefix)[0]
-            if ((pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0)) // 500) % 2 == 0:
-                pygame.draw.line(surface, C.ACCENT, (cursor_x, inp_rect.y + 6), (cursor_x, inp_rect.bottom - 6), 2)
+            if (
+                (pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0))
+                // 500
+            ) % 2 == 0:
+                pygame.draw.line(
+                    surface,
+                    C.ACCENT,
+                    (cursor_x, inp_rect.y + 6),
+                    (cursor_x, inp_rect.bottom - 6),
+                    2,
+                )
         self._rects["input"] = inp_rect
 
         # Items list
@@ -2659,7 +2793,9 @@ class AddWordsModal:
             pygame.draw.rect(surface, C.BORDER, track, 1, border_radius=4)
             ratio = list_h / total_h
             thumb_h = max(20, int(track.height * ratio))
-            thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+            thumb_y = track.y + int(
+                (track.height - thumb_h) * (self._scroll / max(1, self._max_scroll))
+            )
             thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_h)
             pygame.draw.rect(surface, C.ACCENT, thumb, border_radius=4)
             # store scrollbar rects for interaction
@@ -2671,11 +2807,29 @@ class AddWordsModal:
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 48, 72, 32)
         self._rects["apply"] = apply_btn
         self._rects["close"] = close_btn
-        draw_button(surface, apply_btn, "Apply", bg=C.TEAL, fg=C.WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
-        draw_button(surface, close_btn, "Close", bg=C.RED, fg=C.WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(
+            surface,
+            apply_btn,
+            "Apply",
+            bg=C.TEAL,
+            fg=C.WHITE,
+            hovered=apply_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=C.RED,
+            fg=C.WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
 
 class DeleteWordsModal:
     """Modal to search and delete words from a file."""
+
     ROW_H = 32
 
     def __init__(self):
@@ -2704,7 +2858,9 @@ class DeleteWordsModal:
         self.visible = True
         self.file_path = file_path
         self.language = language
-        self.title = f"Delete Words from {os.path.basename(file_path) if file_path else 'file'}"
+        self.title = (
+            f"Delete Words from {os.path.basename(file_path) if file_path else 'file'}"
+        )
         self.search_text = ""
         # Ensure previously selected items that exist in this file appear immediately
         try:
@@ -2755,7 +2911,9 @@ class DeleteWordsModal:
                     # ensure selected items remain in the list
                     sel_in_file = [w for w in self.selected if w in all_words]
                     # build matches: selected first, then found excluding selected
-                    self.matches = sel_in_file + [w for w in found if w not in self.selected]
+                    self.matches = sel_in_file + [
+                        w for w in found if w not in self.selected
+                    ]
                     # reset scroll to top
                     self._scroll = 0
                     return True
@@ -2879,7 +3037,9 @@ class DeleteWordsModal:
                 new_y = event.pos[1] - self._drag_offset
                 max_thumb_y = track.y + track.height - thumb.height
                 ratio = (new_y - track.y) / max(1, max_thumb_y - track.y)
-                self._scroll = max(0, min(self._max_scroll, int(ratio * self._max_scroll)))
+                self._scroll = max(
+                    0, min(self._max_scroll, int(ratio * self._max_scroll))
+                )
             return True
         return True
 
@@ -2930,7 +3090,9 @@ class DeleteWordsModal:
         track = pygame.Rect(panel.right - 28, list_top + 2, 8, list_h - 4)
         ratio = list_h / total_h
         thumb_h = max(20, int(track.height * ratio))
-        thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+        thumb_y = track.y + int(
+            (track.height - thumb_h) * (self._scroll / max(1, self._max_scroll))
+        )
         return track, pygame.Rect(track.x, thumb_y, track.width, thumb_h)
 
     def draw(self, surface, W, H, mouse_pos):
@@ -2946,22 +3108,49 @@ class DeleteWordsModal:
         # Search field (styled like other input fields)
         inp_rect = pygame.Rect(panel.x + 20, panel.y + 64, panel.width - 40, 34)
         active = self.active_field == "search"
-        draw_panel(surface, inp_rect, C.BLUE_BG if active else C.PANEL2, C.ACCENT if active else C.BORDER, radius=8)
+        draw_panel(
+            surface,
+            inp_rect,
+            C.BLUE_BG if active else C.PANEL2,
+            C.ACCENT if active else C.BORDER,
+            radius=8,
+        )
         txt = self.search_text if self.search_text else "Type sequence and press Enter"
         color = C.TEXT if self.search_text else C.MUTED
-        blit_text(surface, txt, FONT_SM, color, inp_rect.x + 8, inp_rect.centery, anchor="midleft")
+        blit_text(
+            surface,
+            txt,
+            FONT_SM,
+            color,
+            inp_rect.x + 8,
+            inp_rect.centery,
+            anchor="midleft",
+        )
         # draw cursor when active
         if active:
             cursor_pos = clamp(getattr(self, "cursor_pos", 0), 0, len(self.search_text))
             prefix = self.search_text[:cursor_pos]
-            display_text = fit_text_with_ellipsis(self.search_text, FONT_SM, inp_rect.width - 24)
+            display_text = fit_text_with_ellipsis(
+                self.search_text, FONT_SM, inp_rect.width - 24
+            )
             if display_text != self.search_text and cursor_pos > len(display_text):
-                visible_prefix = display_text[:-3] if display_text.endswith("...") else display_text
+                visible_prefix = (
+                    display_text[:-3] if display_text.endswith("...") else display_text
+                )
                 cursor_x = inp_rect.x + 8 + FONT_SM.size(visible_prefix)[0]
             else:
                 cursor_x = inp_rect.x + 8 + FONT_SM.size(prefix)[0]
-            if ((pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0)) // 500) % 2 == 0:
-                pygame.draw.line(surface, C.ACCENT, (cursor_x, inp_rect.y + 6), (cursor_x, inp_rect.bottom - 6), 2)
+            if (
+                (pygame.time.get_ticks() - getattr(self, "cursor_blink_start", 0))
+                // 500
+            ) % 2 == 0:
+                pygame.draw.line(
+                    surface,
+                    C.ACCENT,
+                    (cursor_x, inp_rect.y + 6),
+                    (cursor_x, inp_rect.bottom - 6),
+                    2,
+                )
         self._rects["input"] = inp_rect
 
         # Selected groups (show chosen words grouped by file/category)
@@ -3015,7 +3204,9 @@ class DeleteWordsModal:
                 else:
                     pygame.draw.rect(surface, bg_color, r, border_radius=8)
                     pygame.draw.rect(surface, bdr_color, r, 1, border_radius=8)
-                blit_text(surface, w, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft")
+                blit_text(
+                    surface, w, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft"
+                )
                 m = FONT_SM.render(special_chars["X"], True, C.TEXT)
                 surface.blit(m, m.get_rect(midright=(r.right - 8, r.centery)))
             else:
@@ -3026,7 +3217,9 @@ class DeleteWordsModal:
                 else:
                     pygame.draw.rect(surface, C.PANEL2, r, border_radius=8)
                     pygame.draw.rect(surface, C.BORDER, r, 1, border_radius=8)
-                blit_text(surface, w, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft")
+                blit_text(
+                    surface, w, FONT_SM, C.TEXT, r.x + 8, r.centery, anchor="midleft"
+                )
             # store rect for interaction/hover
             self._rects[f"match_{idx}"] = r
             y += row_stride
@@ -3039,7 +3232,9 @@ class DeleteWordsModal:
             pygame.draw.rect(surface, C.BORDER, track, 1, border_radius=4)
             ratio = list_h / total_h
             thumb_h = max(20, int(track.height * ratio))
-            thumb_y = track.y + int((track.height - thumb_h) * (self._scroll / max(1, self._max_scroll)))
+            thumb_y = track.y + int(
+                (track.height - thumb_h) * (self._scroll / max(1, self._max_scroll))
+            )
             thumb = pygame.Rect(track.x, thumb_y, track.width, thumb_h)
             pygame.draw.rect(surface, C.ACCENT, thumb, border_radius=4)
             self._rects["_sb_track"] = track
@@ -3050,8 +3245,25 @@ class DeleteWordsModal:
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 48, 72, 32)
         self._rects["apply"] = apply_btn
         self._rects["close"] = close_btn
-        draw_button(surface, apply_btn, "Apply", bg=C.TEAL, fg=C.WHITE, hovered=apply_btn.collidepoint(mouse_pos), font=FONT_SM)
-        draw_button(surface, close_btn, "Close", bg=C.RED, fg=C.WHITE, hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM)
+        draw_button(
+            surface,
+            apply_btn,
+            "Apply",
+            bg=C.TEAL,
+            fg=C.WHITE,
+            hovered=apply_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+        draw_button(
+            surface,
+            close_btn,
+            "Close",
+            bg=C.RED,
+            fg=C.WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
+        )
+
 
 class ShowStatisticsModal:
     STAT_ITEMS = [
@@ -3096,7 +3308,7 @@ class ShowStatisticsModal:
         self._picker_scroll = 0
         self._sort_picker_open = False
         self._sort_picker_scroll = 0
-        
+
     def hide(self):
         self.visible = False
         self._picker_open = False
@@ -3108,7 +3320,7 @@ class ShowStatisticsModal:
         elif self.sort_order == "descend":
             pairs.sort(key=lambda p: (-p[1], p[0]))
         return pairs
-    
+
     def _panel_rect(self, W, H):
         pw = min(980, W - 60)
         ph = min(680, H - 50)
@@ -3144,7 +3356,12 @@ class ShowStatisticsModal:
                         counter[ch] += 1
             data = [counter.get(lbl, 0) for lbl in letters]
             summary = _stats_summary(data)
-            return letters, data, summary, f"Letter frequency at position {self.pos_index + 1}"
+            return (
+                letters,
+                data,
+                summary,
+                f"Letter frequency at position {self.pos_index + 1}",
+            )
 
         if self.stat_key == "vowels":
             ratios = []
@@ -3201,7 +3418,9 @@ class ShowStatisticsModal:
             labels = [k.upper() for k, _ in pairs]
             data = [v for _, v in pairs]
             summary = _stats_summary(data)
-            title = ["Bigram", "Trigram", "Tetragram", "Pentagram"][n-2] + " frequency"
+            title = ["Bigram", "Trigram", "Tetragram", "Pentagram"][
+                n - 2
+            ] + " frequency"
             return labels, data, summary, title
 
         # syllables
@@ -3246,7 +3465,9 @@ class ShowStatisticsModal:
                 letters_w = _word_letters(w, self.language)
                 if not letters_w:
                     continue
-                r = sum(1 for ch in letters_w if _is_vowel(ch, self.language)) / len(letters_w)
+                r = sum(1 for ch in letters_w if _is_vowel(ch, self.language)) / len(
+                    letters_w
+                )
                 if b < 1.0:
                     if a <= r < b:
                         out.append(w)
@@ -3257,13 +3478,19 @@ class ShowStatisticsModal:
 
         if self.stat_key == "unique":
             n = int(label)
-            return [w for w in words if w and len(set(_word_letters(w, self.language))) == n]
+            return [
+                w for w in words if w and len(set(_word_letters(w, self.language))) == n
+            ]
 
         if self.stat_key == "first_letter":
-            return [w for w in words if w and _base_letter(w[0], self.language) == label]
+            return [
+                w for w in words if w and _base_letter(w[0], self.language) == label
+            ]
 
         if self.stat_key == "last_letter":
-            return [w for w in words if w and _base_letter(w[-1], self.language) == label]
+            return [
+                w for w in words if w and _base_letter(w[-1], self.language) == label
+            ]
 
         if self.stat_key == "ngrams":
             n = self.ngram_size
@@ -3548,12 +3775,20 @@ class ShowStatisticsModal:
                 self._sort_picker_scroll = 0
                 return True
 
-            if self.stat_key == "pos_letters" and self._rects.get("pos_selector") and self._rects["pos_selector"].collidepoint(event.pos):
+            if (
+                self.stat_key == "pos_letters"
+                and self._rects.get("pos_selector")
+                and self._rects["pos_selector"].collidepoint(event.pos)
+            ):
                 max_pos = max(1, max((len(w) for w in self.words), default=1))
                 self.pos_index = (self.pos_index + 1) % max_pos
                 return True
 
-            if self.stat_key == "ngrams" and self._rects.get("ngram_toggle") and self._rects["ngram_toggle"].collidepoint(event.pos):
+            if (
+                self.stat_key == "ngrams"
+                and self._rects.get("ngram_toggle")
+                and self._rects["ngram_toggle"].collidepoint(event.pos)
+            ):
                 self.ngram_size = ((self.ngram_size - 2) + 1) % 4 + 2
                 return True
 
@@ -3588,7 +3823,8 @@ class ShowStatisticsModal:
                         row_h, gap = 28, 4
                         visible = max(1, (picker.height - 16) // (row_h + gap))
                         self._picker_scroll = clamp(
-                            self._picker_scroll - wheel_y, 0,
+                            self._picker_scroll - wheel_y,
+                            0,
                             max(0, len(self.STAT_ITEMS) - visible),
                         )
                         return True
@@ -3599,7 +3835,8 @@ class ShowStatisticsModal:
                         row_h, gap = 28, 4
                         visible = max(1, (picker.height - 16) // (row_h + gap))
                         self._sort_picker_scroll = clamp(
-                            self._sort_picker_scroll - wheel_y, 0,
+                            self._sort_picker_scroll - wheel_y,
+                            0,
                             max(0, sort_items_len - visible),
                         )
                         return True
@@ -3617,16 +3854,24 @@ class ShowStatisticsModal:
         panel = self._panel_rect(W, H)
         draw_panel(surface, panel, C.PANEL, C.BORDER, radius=16)
 
-        title_rect = blit_text(surface, "Show Statistics", FONT_LG, C.TEXT, panel.x + 24, panel.y + 18)
+        title_rect = blit_text(
+            surface, "Show Statistics", FONT_LG, C.TEXT, panel.x + 24, panel.y + 18
+        )
 
         stat_selector_w = 160
         orient_btn_w = 120
         sort_btn_w = 120
         controls_y = panel.y + 18 + max(0, (title_rect.height - 30) // 2)
 
-        stat_selector = pygame.Rect(title_rect.right + 18, controls_y, stat_selector_w, 30)
-        orient_btn = pygame.Rect(panel.right - orient_btn_w - 10, controls_y, orient_btn_w, 30)
-        sort_btn = pygame.Rect(orient_btn.left - sort_btn_w - 10, controls_y, sort_btn_w, 30)
+        stat_selector = pygame.Rect(
+            title_rect.right + 18, controls_y, stat_selector_w, 30
+        )
+        orient_btn = pygame.Rect(
+            panel.right - orient_btn_w - 10, controls_y, orient_btn_w, 30
+        )
+        sort_btn = pygame.Rect(
+            orient_btn.left - sort_btn_w - 10, controls_y, sort_btn_w, 30
+        )
 
         self._rects["stat_selector"] = stat_selector
         self._rects["orient_btn"] = orient_btn
@@ -3686,7 +3931,7 @@ class ShowStatisticsModal:
             draw_button(
                 surface,
                 extra_btn,
-                ["Bi", "Tri", "Tetra", "Penta"][self.ngram_size-2],
+                ["Bi", "Tri", "Tetra", "Penta"][self.ngram_size - 2],
                 bg=C.BLUE_BG,
                 fg=C.WHITE,
                 hovered=extra_btn.collidepoint(mouse_pos),
@@ -3704,7 +3949,9 @@ class ShowStatisticsModal:
         self._rects["sort_picker_items"] = []
 
         labels, values, summary, subtitle = self._compute()
-        subtitle_rect = blit_text(surface, subtitle, FONT_SM, C.TEXT, panel.x + 24, panel.y + 50)
+        subtitle_rect = blit_text(
+            surface, subtitle, FONT_SM, C.TEXT, panel.x + 24, panel.y + 50
+        )
         pairs = self._ordered_pairs(labels, values)
         labels = [p[0] for p in pairs]
         values = [p[1] for p in pairs]
@@ -3717,13 +3964,15 @@ class ShowStatisticsModal:
         graph_bottom = close_btn.top - 5
 
         graph_area = pygame.Rect(
-            panel.x + 12,                 # closer to the modal edge
+            panel.x + 12,  # closer to the modal edge
             graph_top,
-            panel.width - 24,             # almost full width
+            panel.width - 24,  # almost full width
             max(20, graph_bottom - graph_top),
         )
 
-        self._rects["bar_rects"] = self._draw_graph(surface, graph_area, labels, values, mouse_pos)
+        self._rects["bar_rects"] = self._draw_graph(
+            surface, graph_area, labels, values, mouse_pos
+        )
 
         if values:
             min_v = min(values)
@@ -3738,7 +3987,9 @@ class ShowStatisticsModal:
             f"{special_chars['*']}  Std Dev: {std_v:.2f}    |    "
             f"Min: {min_v:.2f}  {special_chars['*']}  Max: {max_v:.2f}"
         )
-        blit_text(surface, summary_text, FONT_SM, C.MUTED, panel.x + 24, panel.bottom - 36)
+        blit_text(
+            surface, summary_text, FONT_SM, C.MUTED, panel.x + 24, panel.bottom - 36
+        )
 
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
         self._rects["close"] = close_btn
@@ -3754,16 +4005,22 @@ class ShowStatisticsModal:
 
         # Draw dropdowns last so they stay above the graph and footer widgets.
         if self._picker_open:
-            picker = pygame.Rect(stat_selector.x, stat_selector.bottom + 6, stat_selector_w, 300)
+            picker = pygame.Rect(
+                stat_selector.x, stat_selector.bottom + 6, stat_selector_w, 300
+            )
             self._rects["picker"] = picker
             draw_panel(surface, picker, C.PANEL2, C.BORDER, radius=12)
 
             row_h = 28
             gap = 4
             visible = max(1, (picker.height - 16) // (row_h + gap))
-            start = clamp(self._picker_scroll, 0, max(0, len(self.STAT_ITEMS) - visible))
+            start = clamp(
+                self._picker_scroll, 0, max(0, len(self.STAT_ITEMS) - visible)
+            )
             items = []
-            for i, (key, label) in enumerate(self.STAT_ITEMS[start : start + visible], start=start):
+            for i, (key, label) in enumerate(
+                self.STAT_ITEMS[start : start + visible], start=start
+            ):
                 r = pygame.Rect(
                     picker.x + 10,
                     picker.y + 8 + (i - start) * (row_h + gap),
@@ -3780,7 +4037,15 @@ class ShowStatisticsModal:
 
                 pygame.draw.rect(surface, fill, r, border_radius=8)
                 pygame.draw.rect(surface, border, r, 1, border_radius=8)
-                blit_text(surface, label, FONT_SM, C.TEXT, r.x + 10, r.centery, anchor="midleft")
+                blit_text(
+                    surface,
+                    label,
+                    FONT_SM,
+                    C.TEXT,
+                    r.x + 10,
+                    r.centery,
+                    anchor="midleft",
+                )
             self._rects["picker_items"] = items
 
         if self._sort_picker_open:
@@ -3788,13 +4053,21 @@ class ShowStatisticsModal:
             self._rects["sort_picker"] = picker
             draw_panel(surface, picker, C.PANEL2, C.BORDER, radius=12)
 
-            sort_items = [("normal", "Normal"), ("ascend", "Ascend"), ("descend", "Descend")]
+            sort_items = [
+                ("normal", "Normal"),
+                ("ascend", "Ascend"),
+                ("descend", "Descend"),
+            ]
             row_h = 28
             gap = 4
             visible = max(1, (picker.height - 16) // (row_h + gap))
-            start = clamp(self._sort_picker_scroll, 0, max(0, len(sort_items) - visible))
+            start = clamp(
+                self._sort_picker_scroll, 0, max(0, len(sort_items) - visible)
+            )
             items = []
-            for i, (key, label) in enumerate(sort_items[start : start + visible], start=start):
+            for i, (key, label) in enumerate(
+                sort_items[start : start + visible], start=start
+            ):
                 r = pygame.Rect(
                     picker.x + 10,
                     picker.y + 8 + (i - start) * (row_h + gap),
@@ -3810,8 +4083,17 @@ class ShowStatisticsModal:
                     border = lighten(border, 12)
                 pygame.draw.rect(surface, fill, r, border_radius=8)
                 pygame.draw.rect(surface, border, r, 1, border_radius=8)
-                blit_text(surface, label, FONT_SM, C.TEXT, r.x + 10, r.centery, anchor="midleft")
+                blit_text(
+                    surface,
+                    label,
+                    FONT_SM,
+                    C.TEXT,
+                    r.x + 10,
+                    r.centery,
+                    anchor="midleft",
+                )
             self._rects["sort_picker_items"] = items
+
 
 class SummaryModal:
     """Pygame modal replacement for the old tkinter 'Slots Review' /
@@ -3845,7 +4127,9 @@ class SummaryModal:
         return pygame.Rect((W - pw) // 2, (H - ph) // 2, pw, ph)
 
     def _title(self):
-        return "Patterns Review" if self.finder_mode == "pattern_hunt" else "Slots Review"
+        return (
+            "Patterns Review" if self.finder_mode == "pattern_hunt" else "Slots Review"
+        )
 
     def _lines(self):
         return build_summary_lines()
@@ -3992,16 +4276,25 @@ class SummaryModal:
         self._rects["copy"] = copy_btn
         copy_label = "Copied!" if self._copied_flash > 0 else "Copy"
         draw_button(
-            surface, copy_btn, copy_label,
-            bg=C.GREEN if self._copied_flash > 0 else C.TEAL, fg=C.WHITE,
-            hovered=copy_btn.collidepoint(mouse_pos), font=FONT_SM,
+            surface,
+            copy_btn,
+            copy_label,
+            bg=C.GREEN if self._copied_flash > 0 else C.TEAL,
+            fg=C.WHITE,
+            hovered=copy_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
         )
 
         close_btn = pygame.Rect(panel.right - 96, panel.bottom - 42, 72, 28)
         self._rects["close"] = close_btn
         draw_button(
-            surface, close_btn, "Close", bg=C.RED, fg=C.WHITE,
-            hovered=close_btn.collidepoint(mouse_pos), font=FONT_SM
+            surface,
+            close_btn,
+            "Close",
+            bg=C.RED,
+            fg=C.WHITE,
+            hovered=close_btn.collidepoint(mouse_pos),
+            font=FONT_SM,
         )
 
     @staticmethod

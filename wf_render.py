@@ -11,31 +11,63 @@ import pygame
 import wf_constants as C
 import wf_state as S
 from wf_constants import (
-    FONT_SM, FONT_MD, FONT_LG, LINK_FONT_SM, PAD, GAP,
-    H_HEADER, H_CTRL, H_FILES, LEFT_LABEL_W, REVIEW_BTN_W, REVIEW_BTN_H,
-    RESULTS_TOP_Y, WORKSPACE_Y, MAX_WORD_LENGTH, MAX_MAX_PREVIEW,
-    MIN_RESULTS_PER_ROW, MAX_RESULTS_PER_ROW, PH_ROWS, PH_COLS,
-    ENGLISH_GROUP_BY_FIRST, GREEK_GROUP_BY_FIRST, special_chars,
-    clamp, short_path,
+    FONT_SM,
+    FONT_MD,
+    FONT_LG,
+    LINK_FONT_SM,
+    PAD,
+    GAP,
+    H_HEADER,
+    H_CTRL,
+    H_FILES,
+    LEFT_LABEL_W,
+    REVIEW_BTN_W,
+    REVIEW_BTN_H,
+    RESULTS_TOP_Y,
+    WORKSPACE_Y,
+    MAX_WORD_LENGTH,
+    MAX_MAX_PREVIEW,
+    MIN_RESULTS_PER_ROW,
+    MAX_RESULTS_PER_ROW,
+    PH_ROWS,
+    PH_COLS,
+    ENGLISH_GROUP_BY_FIRST,
+    GREEK_GROUP_BY_FIRST,
+    special_chars,
+    clamp,
+    short_path,
 )
 from wf_search import expand_sequence
 from wf_ui_helpers import (
-    blit_text, draw_panel, draw_button, draw_nav_button, draw_pill_toggle,
-    draw_slider, draw_virtual_keyboard, fit_text_with_ellipsis, lighten,
+    blit_text,
+    draw_panel,
+    draw_button,
+    draw_nav_button,
+    draw_pill_toggle,
+    draw_slider,
+    draw_virtual_keyboard,
+    fit_text_with_ellipsis,
+    lighten,
 )
 from wf_state import (
-    ph_cell_slots, ph_cell_count, ph_cell_selected_idx,
-    lookup_word_entry, format_meaning_lines, rebuild_results_cache,
+    ph_cell_slots,
+    ph_cell_count,
+    ph_cell_selected_idx,
+    lookup_word_entry,
+    format_meaning_lines,
+    rebuild_results_cache,
     draw_search_progress_bar,
-    _results_action_rects, _results_legend_rects, _results_scroll_rects,
+    _results_action_rects,
+    _results_legend_rects,
+    _results_scroll_rects,
 )
-
 
 _result_word_rects = []  # list of (word, rect)
 
 _hover_word_rect = None  # (word, rect) that is hovered
 
 _info_btn_rect = pygame.Rect(0, 0, 0, 0)
+
 
 def render_header(mouse_pos):
     global _info_btn_rect
@@ -64,11 +96,11 @@ def render_header(mouse_pos):
     )
 
     hints1 = (
-        f"Backspace = Erase last  {special_chars["*"]}  Delete = Clear slot  {special_chars["*"]}  (Shift +) {special_chars["<"]} {special_chars[">"]} = Navigate  {special_chars["*"]}  {special_chars["^"]} {special_chars["v"]} = Mode"
-        f"  {special_chars["*"]}  Tab = Letter Match/Pattern Hunt  {special_chars["*"]}  Shift+Space = Slot/All  {special_chars["*"]}  Ctrl+Space = Expand (PH)"
+        f"Backspace = Erase last  {special_chars["*"]}  Delete = Clear slot  {special_chars["*"]}  (Shift){special_chars["<"]}/{special_chars[">"]} = Navigate  {special_chars["*"]}  {special_chars["^"]}/{special_chars["v"]} = Mode"
+        f"  {special_chars["*"]}  Shift+Space = Slot/All  {special_chars["*"]}  Ctrl+Space = Expand (PH)  {special_chars["*"]}  ]/[ = Words per Raw  {special_chars["*"]}  Ctrl+S = Save"
     )
     hints2 = (
-        f"/ = Greek/English  {special_chars["*"]}  Ctrl+S = Save  {special_chars["*"]}  Page Up/Down = Scroll  {special_chars["*"]}  Shift+/- = Word length  {special_chars["*"]}  Ctrl+/- = Max preview"
+        f"/ = Greek/English  {special_chars["*"]}  Tab = Letter Match/Pattern Hunt  {special_chars["*"]}  Page Up/Down = Scroll  {special_chars["*"]}  Shift+/- = Word length  {special_chars["*"]}  Ctrl+/- = Max preview"
         f"  {special_chars["*"]}  +/- = Add/remove PH slot  {special_chars["*"]}  Ctrl+I = Info  {special_chars["*"]}  Enter = Search"
     )
     blit_text(
@@ -96,6 +128,7 @@ def render_header(mouse_pos):
         font=FONT_LG,
     )
 
+
 def distribute_columns(total_width, left_pad, right_pad, widths):
     """Given a list of fixed column widths, return their x-positions so that
     the gap between every consecutive pair of columns is equal.
@@ -115,6 +148,7 @@ def distribute_columns(total_width, left_pad, right_pad, widths):
         xs.append(x)
         x += w + gap
     return xs
+
 
 def render_controls(mouse_pos):
     """Returns t1, k1, t2, k2, mode_rects, scope_rects, lang_rects, search_rect,
@@ -264,7 +298,9 @@ def render_controls(mouse_pos):
     # ── Scope pill toggle (Slot / All) ────────────────────────────
     scope_rect = pygame.Rect(scope_x, pill_y_default, scope_w, pill_h)
     active_scope = (
-        S.state.input_scope if S.state.finder_mode == "letter_match" else S.state.ph_scope
+        S.state.input_scope
+        if S.state.finder_mode == "letter_match"
+        else S.state.ph_scope
     )
     scope_rects = draw_pill_toggle(
         C.screen,
@@ -311,6 +347,7 @@ def render_controls(mouse_pos):
         ph_col_rects,
     )
 
+
 def render_file_row(mouse_pos):
     y0 = H_HEADER + H_CTRL
     pygame.draw.rect(C.screen, C.BG, (0, y0, C.WIDTH, H_FILES))
@@ -342,7 +379,15 @@ def render_file_row(mouse_pos):
             border_radius=4,
         )
         pygame.draw.rect(C.screen, C.GREEN_BDR, plus_rect, 1, border_radius=4)
-        blit_text(C.screen, "+", FONT_SM, C.GREEN, plus_rect.centerx, plus_rect.centery, anchor="center")
+        blit_text(
+            C.screen,
+            "+",
+            FONT_SM,
+            C.GREEN,
+            plus_rect.centerx,
+            plus_rect.centery,
+            anchor="center",
+        )
 
         pygame.draw.rect(
             C.screen,
@@ -351,10 +396,24 @@ def render_file_row(mouse_pos):
             border_radius=4,
         )
         pygame.draw.rect(C.screen, C.RED_BDR, minus_rect, 1, border_radius=4)
-        blit_text(C.screen, "-", FONT_SM, C.RED, minus_rect.centerx, minus_rect.centery, anchor="center")
+        blit_text(
+            C.screen,
+            "-",
+            FONT_SM,
+            C.RED,
+            minus_rect.centerx,
+            minus_rect.centery,
+            anchor="center",
+        )
 
         blit_text(
-            C.screen, f"{count} words", FONT_SM, C.MUTED, tx + btn_size * 2 + 12, by + 20, anchor="topleft"
+            C.screen,
+            f"{count} words",
+            FONT_SM,
+            C.MUTED,
+            tx + btn_size * 2 + 12,
+            by + 20,
+            anchor="topleft",
         )
         hover_rect = pygame.Rect(tx, by, 126, 36)
 
@@ -496,7 +555,9 @@ def render_file_row(mouse_pos):
     ef_btn, ef_link, ef_plus, ef_minus = file_unit(
         english_x, "English", S.state.english_file, S.state.english_count
     )
-    gf_btn, gf_link, gf_plus, gf_minus = file_unit(greek_x, "Greek", S.state.greek_file, S.state.greek_count)
+    gf_btn, gf_link, gf_plus, gf_minus = file_unit(
+        greek_x, "Greek", S.state.greek_file, S.state.greek_count
+    )
 
     return (
         gf_btn,
@@ -519,6 +580,7 @@ def render_file_row(mouse_pos):
         meaning_btn,
     )
 
+
 def _slot_layout():
     gap = 8
     left_edge = PAD + LEFT_LABEL_W
@@ -539,6 +601,7 @@ def _slot_layout():
     slot_h = 32
     return slot_w, slot_h, sx, ty, gap
 
+
 def format_exist_letters(counter):
     parts = []
     for key, count in counter.items():
@@ -551,6 +614,7 @@ def format_exist_letters(counter):
         label = "".join(group)
         parts.append(f"{label} (x{count})" if count > 1 else label)
     return f"  {special_chars["*"]}  ".join(parts) if parts else f"{special_chars["-"]}"
+
 
 def render_workspace_lm(mouse_pos):
     """Letter Match workspace. Returns (slot_w, slot_h, sx, ty, gap, table_bottom_y, summary_btn, lm_ui)."""
@@ -703,7 +767,9 @@ def render_workspace_lm(mouse_pos):
 
     pygame.draw.rect(C.screen, C.BROWN_BG, exist_rect, border_radius=8)
     pygame.draw.rect(C.screen, exist_bdr_col, exist_rect, exist_bdr_w, border_radius=8)
-    blit_text(C.screen, "EXIST", FONT_MD, C.BROWN, PAD + 6, table_y + exist_row_h // 2 - 10)
+    blit_text(
+        C.screen, "EXIST", FONT_MD, C.BROWN, PAD + 6, table_y + exist_row_h // 2 - 10
+    )
 
     # Highlight Absent row when mode is "absent"
     if S.state.input_mode == "absent":
@@ -717,8 +783,17 @@ def render_workspace_lm(mouse_pos):
         absent_bdr_w = 1
 
     pygame.draw.rect(C.screen, C.ORANGE_BG, absent_rect, border_radius=8)
-    pygame.draw.rect(C.screen, absent_bdr_col, absent_rect, absent_bdr_w, border_radius=8)
-    blit_text(C.screen, "ABSENT", FONT_MD, C.ORANGE, absent_rect.x + 6, table_y + exist_row_h // 2 - 10)
+    pygame.draw.rect(
+        C.screen, absent_bdr_col, absent_rect, absent_bdr_w, border_radius=8
+    )
+    blit_text(
+        C.screen,
+        "ABSENT",
+        FONT_MD,
+        C.ORANGE,
+        absent_rect.x + 6,
+        table_y + exist_row_h // 2 - 10,
+    )
 
     if exist_items:
         # Draw each exist item as a small chip, navigatable
@@ -777,7 +852,9 @@ def render_workspace_lm(mouse_pos):
             chip_rect = pygame.Rect(chip_x, chip_y, tw_chip, chip_h)
             lm_ui["absent_chips"].append((ai, chip_rect))
 
-            is_sel = S.state.input_mode == "absent" and ai == S.state.selected_absent_idx
+            is_sel = (
+                S.state.input_mode == "absent" and ai == S.state.selected_absent_idx
+            )
             chip_bg = C.ORANGE_BDR if is_sel else C.ORANGE_BG
             chip_bdr = C.ORANGE if is_sel else C.ORANGE_BDR
             chip_bdr_w = 2 if is_sel else 1
@@ -797,7 +874,9 @@ def render_workspace_lm(mouse_pos):
                 break
     else:
         img = FONT_SM.render(f"{special_chars['-']}", True, C.MUTED)
-        C.screen.blit(img, img.get_rect(midleft=(absent_rect.x + 90, table_y + exist_row_h // 2)))
+        C.screen.blit(
+            img, img.get_rect(midleft=(absent_rect.x + 90, table_y + exist_row_h // 2))
+        )
 
     table_y += exist_row_h + 6
 
@@ -821,6 +900,7 @@ def render_workspace_lm(mouse_pos):
 
     return slot_w, slot_h, sx, ty, gap, RESULTS_TOP_Y, summary_btn, lm_ui
 
+
 def _ph_cell_layout(cell_rect, slot_count):
     btn_w = 16
     inner_pad = 4
@@ -831,6 +911,7 @@ def _ph_cell_layout(cell_rect, slot_count):
     total_w = n * slot_w + (n - 1) * gap
     sx = cell_rect.x + btn_w + inner_pad + max(0, (usable - total_w) // 2)
     return slot_w, sx, gap, btn_w
+
 
 def render_workspace_ph(mouse_pos):
     top_y = WORKSPACE_Y + PAD
@@ -879,7 +960,9 @@ def render_workspace_ph(mouse_pos):
         y = row_start_y + ri * (cell_h + row_gap)
         row_lbl = row_labels[ri]
         row_col = row_colors[ri]
-        blit_text(C.screen, row_lbl.upper(), FONT_MD, row_col, PAD, y + cell_h // 2 - 10)
+        blit_text(
+            C.screen, row_lbl.upper(), FONT_MD, row_col, PAD, y + cell_h // 2 - 10
+        )
 
         for ci, col in enumerate(PH_COLS):
             x = grid_left + ci * (cell_w + col_gap)
@@ -892,7 +975,9 @@ def render_workspace_ph(mouse_pos):
             cell_border = row_col if is_active_cell else col_colors[ci]
             cell_border_w = 3 if is_active_cell else 1
             pygame.draw.rect(C.screen, col_bg[ci], cell, border_radius=8)
-            pygame.draw.rect(C.screen, cell_border, cell, cell_border_w, border_radius=8)
+            pygame.draw.rect(
+                C.screen, cell_border, cell, cell_border_w, border_radius=8
+            )
 
             count = ph_cell_count(row, col)
             selected_idx = ph_cell_selected_idx(row, col)
@@ -955,7 +1040,9 @@ def render_workspace_ph(mouse_pos):
                 pygame.draw.rect(C.screen, slot_bdr, sr, slot_bdr_w, border_radius=6)
 
                 disp_seq = (
-                    expand_sequence(seq, S.state.language) if (seq and expanded) else seq
+                    expand_sequence(seq, S.state.language)
+                    if (seq and expanded)
+                    else seq
                 )
                 disp = (
                     fit_text_with_ellipsis(disp_seq, FONT_SM, slot_w - 10)
@@ -963,7 +1050,9 @@ def render_workspace_ph(mouse_pos):
                     else f"{special_chars["-"]}"
                 )
                 img = FONT_SM.render(
-                    disp, True, C.PURPLE if expanded and seq else (C.TEXT if seq else C.MUTED)
+                    disp,
+                    True,
+                    C.PURPLE if expanded and seq else (C.TEXT if seq else C.MUTED),
                 )
                 C.screen.blit(img, img.get_rect(center=sr.center))
 
@@ -984,8 +1073,9 @@ def render_workspace_ph(mouse_pos):
                 C.screen.blit(e_img, e_img.get_rect(center=exp_btn.center))
 
                 if sr.collidepoint(mouse_pos):
-                    hover_text = f"{row_lbl} / {col_labels[ci]}: {disp_seq or f'{special_chars["-"]}'}" + (
-                        " [expanded]" if expanded else ""
+                    hover_text = (
+                        f"{row_lbl} / {col_labels[ci]}: {disp_seq or f'{special_chars["-"]}'}"
+                        + (" [expanded]" if expanded else "")
                     )
                     hover_pos = mouse_pos
 
@@ -1016,6 +1106,7 @@ def render_workspace_ph(mouse_pos):
         C.screen.blit(tip_img, tip_img.get_rect(center=tip_rect.center))
 
     return RESULTS_TOP_Y, summary_btn, ph_ui
+
 
 def render_results(table_bottom_y, mouse_pos=(0, 0)):
     global _result_word_rects, _hover_word_rect
@@ -1106,31 +1197,33 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         ("no_translation", f"no {special_chars['<>']}"),
         ("no_meaning", f"no {special_chars['?']}"),
         ("no_translation_no_meaning", "none"),
+        ("selected", f"{special_chars['[OK]']}"),
+        ("excluded", f"{special_chars['X']}"),
     ]
 
     legend_y = panel.bottom - 14
 
-    toggle_rect = pygame.Rect(panel.right - PAD - 80, legend_y - 11, 80, 22)
-    hovered_toggle = toggle_rect.collidepoint(mouse_pos)
-    draw_button(
-        C.screen,
-        toggle_rect,
-        "color on" if S.state.colorize_status else "color off",
-        bg=C.ORANGE if S.state.colorize_status else C.BROWN,
-        fg=C.WHITE,
-        radius=8,
-        hovered=hovered_toggle,
-        font=FONT_SM,
-    )
-
-    x = toggle_rect.left - 10
+    x = panel.right - PAD
     legend_rects = {}
 
     for key, short_label in reversed(legend_items):
-        selected = key in S.state.status_filters
-        mark = special_chars["[OK]"] if selected else special_chars["X"]
+        if key in S.state.status_filters:
+            category_active = True
+        elif key in ("selected", "excluded"):
+            category_active = key in S.state.selection_filters
+        else:
+            category_active = False
 
-        label = f"{short_label} {counts.get(key, 0)}"
+        mark = special_chars["[OK]"] if category_active else special_chars["X"]
+
+        if key == "selected":
+            count = sum(1 for v in S.state.word_selections.values() if v == "save")
+        elif key == "excluded":
+            count = sum(1 for v in S.state.word_selections.values() if v == "exclude")
+        else:
+            count = counts.get(key, 0)
+
+        label = f"{short_label} {count}"
         label_w = FONT_SM.size(label)[0]
         chip_w = label_w + 42
         chip_rect = pygame.Rect(x - chip_w, legend_y - 11, chip_w, 22)
@@ -1138,8 +1231,15 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         hovered = chip_rect.collidepoint(mouse_pos)
 
         if S.state.colorize_status:
-            fill = C.STATUS_BG.get(key, C.PANEL2)
-            border = C.STATUS_BDR.get(key, C.BORDER)
+            if key == "selected":
+                fill = C.GREEN_BG
+                border = C.GREEN_BDR
+            elif key == "excluded":
+                fill = C.RED_BG
+                border = C.RED_BDR
+            else:
+                fill = C.STATUS_BG.get(key, C.PANEL2)
+                border = C.STATUS_BDR.get(key, C.BORDER)
         else:
             fill = C.PANEL2
             border = C.BORDER
@@ -1152,8 +1252,8 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         pygame.draw.rect(C.screen, border, chip_rect, 1, border_radius=10)
 
         mark_rect = pygame.Rect(chip_rect.x + 5, chip_rect.y + 5, 12, 12)
-        mark_fill = C.GREEN_BG if selected else C.RED_BG
-        mark_border = C.GREEN_BDR if selected else C.RED_BDR
+        mark_fill = C.GREEN_BG if category_active else C.RED_BG
+        mark_border = C.GREEN_BDR if category_active else C.RED_BDR
         pygame.draw.rect(C.screen, mark_fill, mark_rect, border_radius=4)
         pygame.draw.rect(C.screen, mark_border, mark_rect, 1, border_radius=4)
 
@@ -1171,23 +1271,29 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         )
 
         legend_rects[key] = chip_rect
-        x = chip_rect.left - 8
+        x = chip_rect.left - 10
 
-    _results_legend_rects["toggle"] = toggle_rect
+    _results_legend_rects["toggle"] = None
     _results_legend_rects["items"] = legend_rects
 
     show_words_rect = pygame.Rect(panel.x + PAD, legend_y - 11, 118, 22)
-    show_stats_rect = pygame.Rect(show_words_rect.right + 8, legend_y - 11, 138, 22)
+    show_stats_rect = pygame.Rect(show_words_rect.right + 10, legend_y - 11, 138, 22)
+    color_rect = pygame.Rect(show_stats_rect.right + 10, legend_y - 11, 80, 22)
+    keyboard_rect = pygame.Rect(color_rect.right + 10, legend_y - 11, 80, 22)
 
-    keyboard_rect = pygame.Rect(panel.centerx - 40, legend_y - 11, 80, 22)
-    _results_action_rects["keyboard"] = keyboard_rect
     _results_action_rects["show_words"] = show_words_rect
     _results_action_rects["show_stats"] = show_stats_rect
+    _results_action_rects["color"] = color_rect
+    _results_action_rects["keyboard"] = keyboard_rect
 
     draw_button(
         C.screen,
         keyboard_rect,
-        f"{special_chars['kb']} on" if S.state.keyboard_on else f"{special_chars['kb']} off",
+        (
+            f"{special_chars['kb']} on"
+            if S.state.keyboard_on
+            else f"{special_chars['kb']} off"
+        ),
         bg=C.ORANGE if S.state.keyboard_on else C.BROWN,
         fg=C.WHITE,
         radius=8,
@@ -1215,12 +1321,24 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         hovered=show_stats_rect.collidepoint(mouse_pos),
         font=FONT_SM,
     )
+    draw_button(
+        C.screen,
+        color_rect,
+        "color on" if S.state.colorize_status else "color off",
+        bg=C.ORANGE if S.state.colorize_status else C.BROWN,
+        fg=C.WHITE,
+        radius=8,
+        hovered=color_rect.collidepoint(mouse_pos),
+        font=FONT_SM,
+    )
 
     keyboard_top = panel.bottom - 8
     if S.state.keyboard_on:
         keyboard_top = draw_virtual_keyboard(C.screen, panel, mouse_pos)
 
-    preview = panel_words[S.state.preview_start : S.state.preview_start + S.state.max_preview]
+    preview = panel_words[
+        S.state.preview_start : S.state.preview_start + S.state.max_preview
+    ]
     if not preview:
         msg = (
             "No categories selected — click a legend chip to show results."
