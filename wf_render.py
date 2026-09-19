@@ -97,7 +97,7 @@ def render_header(mouse_pos):
 
     hints1 = (
         f"Backspace = Erase last  {special_chars["*"]}  Delete = Clear slot  {special_chars["*"]}  (Shift){special_chars["<"]}/{special_chars[">"]} = Navigate  {special_chars["*"]}  {special_chars["^"]}/{special_chars["v"]} = Mode"
-        f"  {special_chars["*"]}  Shift+Space = Slot/All  {special_chars["*"]}  Ctrl+Space = Expand (PH)  {special_chars["*"]}  ]/[ = Words per Raw  {special_chars["*"]}  Ctrl+S = Save"
+        f"  {special_chars["*"]}  Shift+Space = Slot/All  {special_chars["*"]}  Ctrl+Space = Expand (PH)  {special_chars["*"]}  ]/[ = Words per Row in Results  {special_chars["*"]}  Ctrl+S = Save"
     )
     hints2 = (
         f"/ = Greek/English  {special_chars["*"]}  Tab = Letter Match/Pattern Hunt  {special_chars["*"]}  Page Up/Down = Scroll  {special_chars["*"]}  Shift+/- = Word length  {special_chars["*"]}  Ctrl+/- = Max preview"

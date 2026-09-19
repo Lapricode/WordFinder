@@ -280,7 +280,7 @@ class InfoModal:
             "bullet",
         ),
         (
-            f"]/[ {special_chars["-"]} increase/decrease words per raw in the results panel.",
+            f"]/[ {special_chars["-"]} increase/decrease words per row in the results panel.",
             "bullet",
         ),
         (
