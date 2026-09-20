@@ -1273,17 +1273,17 @@ def render_results(table_bottom_y, mouse_pos=(0, 0)):
         legend_rects[key] = chip_rect
         x = chip_rect.left - 10
 
+    color_rect = pygame.Rect(x - 80, legend_y - 11, 80, 22)
+    _results_action_rects["color"] = color_rect
+
     _results_legend_rects["toggle"] = None
     _results_legend_rects["items"] = legend_rects
 
     show_words_rect = pygame.Rect(panel.x + PAD, legend_y - 11, 118, 22)
     show_stats_rect = pygame.Rect(show_words_rect.right + 10, legend_y - 11, 138, 22)
-    color_rect = pygame.Rect(show_stats_rect.right + 10, legend_y - 11, 80, 22)
-    keyboard_rect = pygame.Rect(color_rect.right + 10, legend_y - 11, 80, 22)
-
+    keyboard_rect = pygame.Rect(show_stats_rect.right + 10, legend_y - 11, 80, 22)
     _results_action_rects["show_words"] = show_words_rect
     _results_action_rects["show_stats"] = show_stats_rect
-    _results_action_rects["color"] = color_rect
     _results_action_rects["keyboard"] = keyboard_rect
 
     draw_button(
