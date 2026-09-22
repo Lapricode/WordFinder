@@ -24,7 +24,6 @@ except Exception:
 from wf_constants import GREEK_GROUPS
 from wf_search import load_words
 
-
 _NLTK_READY = False
 
 _TRANSLATOR_CACHE = {}
@@ -32,6 +31,7 @@ _TRANSLATOR_CACHE = {}
 _meanings_cache = {}  # path -> {"mtime": float, "data": dict}
 
 ENRICHMENT_SAVE_EVERY_WORDS = 10  # 1 = save every word, higher = faster
+
 
 def ensure_nltk_ready():
     """Lazily download wordnet corpora once, only when meanings are requested."""
@@ -45,8 +45,10 @@ def ensure_nltk_ready():
     except Exception:
         pass
 
+
 def normalize_word(word: str) -> str:
     return word.strip().lower()
+
 
 def translate_text(word: str, source: str, target: str):
     """Generic translate wrapper; returns None on failure."""
@@ -64,11 +66,14 @@ def translate_text(word: str, source: str, target: str):
     except Exception:
         return None
 
+
 def get_greek_translation(word: str) -> str | None:
     return translate_text(word, "en", "el")
 
+
 def get_english_translation(word: str) -> str | None:
     return translate_text(word, "el", "en")
+
 
 def clean_translation(source, translation):
     """
@@ -84,6 +89,7 @@ def clean_translation(source, translation):
     if normalize_word(cleaned) == normalize_word(source):
         return None
     return cleaned
+
 
 def build_status(source_word, translation, senses):
     """
@@ -107,11 +113,14 @@ def build_status(source_word, translation, senses):
         return "no_translation"
     return "no_meaning"
 
+
 def build_status_en(source_word, senses, greek_translation):
     return build_status(source_word, greek_translation, senses)
 
+
 def build_status_el(source_word, english_translation, senses=None):
     return build_status(source_word, english_translation, senses or [])
+
 
 def load_json_dict(path):
     if not path or not os.path.exists(path):
@@ -123,6 +132,7 @@ def load_json_dict(path):
     except Exception:
         return {}
 
+
 def save_json_atomic(path, data):
     tmp = path + ".tmp"
     with open(tmp, "w", encoding="utf-8") as f:
@@ -131,11 +141,13 @@ def save_json_atomic(path, data):
         os.fsync(f.fileno())
     os.replace(tmp, path)
 
+
 def is_single_word(text: str) -> bool:
     if not text:
         return False
     parts = text.strip().split()
     return len(parts) == 1 and parts[0].isalpha()
+
 
 def resolve_senses_for_translation(
     english_translation: str | None,
@@ -177,11 +189,13 @@ def resolve_senses_for_translation(
     # import. Importing inside the function (only needed at call time) breaks
     # the cycle without changing behavior.
     import wf_state as S
+
     S.state.results_cache_dirty = True
 
     if senses:
         return senses, "ok", None
     return [], "no_meaning", None
+
 
 def enrich_english_word(word, max_senses=None):
     senses = get_wordnet_senses(word, max_senses)
@@ -192,6 +206,7 @@ def enrich_english_word(word, max_senses=None):
         "senses": senses,
         "status": build_status_en(word, senses, greek_translation),
     }
+
 
 def enrich_greek_word(
     word,
@@ -224,6 +239,7 @@ def enrich_greek_word(
     if note:
         entry["senses_note"] = note
     return entry
+
 
 def get_wordnet_senses(word: str, max_senses=None):
     """English word -> list of {part_of_speech, definition, examples}."""
@@ -264,12 +280,14 @@ def get_wordnet_senses(word: str, max_senses=None):
             break
     return senses
 
+
 def is_english_letters_only(word: str) -> bool:
     if not word:
         return False
     allowed = {chr(c) for c in range(ord("a"), ord("z") + 1)}
     allowed |= {ch.upper() for ch in allowed}
     return all(ch in allowed for ch in word)
+
 
 def is_greek_letters_only(word: str) -> bool:
     if not word:
@@ -280,6 +298,7 @@ def is_greek_letters_only(word: str) -> bool:
         for ch in g:
             allowed.add(ch)
     return all(ch in allowed for ch in word)
+
 
 def add_words_to_file(path, words, language):
     """Add validated words to text file at path; return (added_count, rejected_list)"""
@@ -331,6 +350,7 @@ def add_words_to_file(path, words, language):
 
     return len(to_add), rejected
 
+
 def delete_words_from_file(path, words_to_delete):
     if not path:
         return 0
@@ -351,6 +371,7 @@ def delete_words_from_file(path, words_to_delete):
     except Exception:
         return 0
     return removed
+
 
 def build_enrichment_entry(job_kind, language, word, existing):
     """

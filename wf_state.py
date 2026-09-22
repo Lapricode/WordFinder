@@ -19,20 +19,48 @@ import pygame
 
 import wf_constants as C
 from wf_constants import (
-    ENGLISH_LETTERS, ENGLISH_GROUP_BY_FIRST, GREEK_GROUPS, GREEK_GROUP_BY_FIRST,
-    GREEK_CHAR_TO_FIRST, INPUT_MODES_LM, INPUT_MODES_PH, PH_ROWS, PH_COLS,
-    MAX_PATTERN_SLOTS, STATUS_KEYS, PAD, FONT_SM,
-    clamp, resource_path, set_theme, special_chars, tokens_for_input,
+    ENGLISH_LETTERS,
+    ENGLISH_GROUP_BY_FIRST,
+    GREEK_GROUPS,
+    GREEK_GROUP_BY_FIRST,
+    GREEK_CHAR_TO_FIRST,
+    INPUT_MODES_LM,
+    INPUT_MODES_PH,
+    PH_ROWS,
+    PH_COLS,
+    MAX_PATTERN_SLOTS,
+    STATUS_KEYS,
+    PAD,
+    FONT_SM,
+    clamp,
+    resource_path,
+    set_theme,
+    special_chars,
+    tokens_for_input,
 )
 from wf_search import (
-    load_words, exist_key_for_input, expand_sequence,
-    _pat_matches_start, _pat_matches_end, _pat_matches_inner, _pat_matches_middle,
-    _check_start_exist, _check_end_exist, _check_inner_exist, _check_middle_exist,
+    load_words,
+    exist_key_for_input,
+    expand_sequence,
+    _pat_matches_start,
+    _pat_matches_end,
+    _pat_matches_inner,
+    _pat_matches_middle,
+    _check_start_exist,
+    _check_end_exist,
+    _check_inner_exist,
+    _check_middle_exist,
 )
 from wf_translate import (
-    ensure_nltk_ready, normalize_word, clean_translation, build_status,
-    load_json_dict, save_json_atomic, build_enrichment_entry,
-    ENRICHMENT_SAVE_EVERY_WORDS, _meanings_cache,
+    ensure_nltk_ready,
+    normalize_word,
+    clean_translation,
+    build_status,
+    load_json_dict,
+    save_json_atomic,
+    build_enrichment_entry,
+    ENRICHMENT_SAVE_EVERY_WORDS,
+    _meanings_cache,
 )
 
 # progress_modal / words_modal: single ProgressModal / ShowWordsModal instances
@@ -67,6 +95,7 @@ _results_scroll_rects = {
 }
 
 _results_keyboard_rects = {"panel": None, "keys": [], "controls": {}}
+
 
 class EnrichmentJob:
     """Runs Translation / Meaning over a word list on a background thread,
@@ -215,6 +244,7 @@ class EnrichmentJob:
         if not self.cancelled and self.done_count >= self.total:
             self.progress_queue.put(("done", None))
 
+
 class SearchJob:
     def __init__(
         self,
@@ -280,7 +310,7 @@ class SearchJob:
                         group = (key,)
                     if sum(wc[ch] for ch in group) > 0:
                         return False
-                    
+
             if self.exist_letters:
                 wc = Counter(word)
                 for key, needed in self.exist_letters.items():
@@ -331,7 +361,9 @@ class SearchJob:
             ]
             absent_pats = [
                 p
-                for p in self.ph_slots[row]["absent"][: self.ph_slot_count[row]["absent"]]
+                for p in self.ph_slots[row]["absent"][
+                    : self.ph_slot_count[row]["absent"]
+                ]
                 if p["seq"]
             ]
             if any(row_match(row, pat) for pat in absent_pats):
@@ -379,6 +411,7 @@ class SearchJob:
         except Exception as e:
             self.progress_queue.put(("error", str(e)))
 
+
 def poll_search_job():
     job = state.search_job
     if job is None:
@@ -404,6 +437,7 @@ def poll_search_job():
                 state.search_job = None
     except queue.Empty:
         pass
+
 
 def draw_search_progress_bar(surface, panel):
     job = state.search_job
@@ -432,6 +466,7 @@ def draw_search_progress_bar(surface, panel):
     surface.blit(img, img.get_rect(center=track.center))
 
     return bar_h + 12
+
 
 class AppState:
     def __init__(self):
@@ -625,31 +660,38 @@ class AppState:
         idx = INPUT_MODES_PH.index(self.ph_mode)
         self.ph_mode = INPUT_MODES_PH[(idx + step) % len(INPUT_MODES_PH)]
 
+
 state = AppState()
 
 set_theme(state.theme)
+
 
 def ph_cell_key(row=None, col=None):
     row = row if row is not None else state.ph_mode
     col = col if col is not None else state.ph_col
     return row, col
 
+
 def ph_cell_slots(row=None, col=None):
     row, col = ph_cell_key(row, col)
     return state.ph_slots[row][col]
+
 
 def ph_cell_count(row=None, col=None):
     row, col = ph_cell_key(row, col)
     return state.ph_slot_count[row][col]
 
+
 def ph_cell_selected_idx(row=None, col=None):
     row, col = ph_cell_key(row, col)
     return state.ph_selected[row][col]
+
 
 def ph_set_cell_selected_idx(idx, row=None, col=None):
     row, col = ph_cell_key(row, col)
     cnt = max(1, ph_cell_count(row, col))
     state.ph_selected[row][col] = clamp(idx, 0, cnt - 1)
+
 
 def ph_adjust_cell_count(delta, row=None, col=None):
     row, col = ph_cell_key(row, col)
@@ -664,11 +706,13 @@ def ph_adjust_cell_count(delta, row=None, col=None):
     state.ph_slot_count[row][col] = new
     ph_set_cell_selected_idx(state.ph_selected[row][col], row, col)
 
+
 tk_root = None
 
 enrichment_choice_win = None
 
 manual_entry_win = None
+
 
 def get_tk_root():
     global tk_root
@@ -677,6 +721,7 @@ def get_tk_root():
         tk_root.withdraw()
         tk_root.attributes("-topmost", True)
     return tk_root
+
 
 def open_text_file(path):
     if not path or not os.path.exists(path):
@@ -693,8 +738,10 @@ def open_text_file(path):
     except Exception as e:
         state.status = f"Open error: {e}"
 
+
 def format_set(s):
     return " ".join("".join(sorted(x)) for x in s) if s else f"{special_chars["-"]}"
+
 
 def copy_to_clipboard(text: str) -> bool:
     """Copies text to the system clipboard.
@@ -712,9 +759,7 @@ def copy_to_clipboard(text: str) -> bool:
     """
     try:
         if sys.platform.startswith("win"):
-            proc = subprocess.Popen(
-                ["clip"], stdin=subprocess.PIPE, close_fds=True
-            )
+            proc = subprocess.Popen(["clip"], stdin=subprocess.PIPE, close_fds=True)
             proc.communicate(input=text.encode("utf-16-le"), timeout=5)
             if proc.returncode == 0:
                 return True
@@ -754,6 +799,7 @@ def copy_to_clipboard(text: str) -> bool:
         return True
     except Exception:
         return False
+
 
 def build_summary_lines():
     """Builds the text lines for the Slots Review / Patterns Review modal,
@@ -814,17 +860,20 @@ def build_summary_lines():
             lines.append("")
     return lines
 
+
 def refresh_summary_window():
     """No-op kept for compatibility: the Slots/Patterns Review is now a
     pygame modal (SummaryModal) that reads live state on every draw, so no
     manual refresh call is needed."""
     return
 
+
 def _tk_root_temp():
     r = Tk()
     r.withdraw()
     r.attributes("-topmost", True)
     return r
+
 
 def open_file_dialog():
     r = _tk_root_temp()
@@ -835,6 +884,7 @@ def open_file_dialog():
     )
     r.destroy()
     return p or ""
+
 
 def save_file_dialog(initial="results.txt"):
     r = _tk_root_temp()
@@ -848,19 +898,23 @@ def save_file_dialog(initial="results.txt"):
     r.destroy()
     return p or ""
 
+
 def refresh_words_counts():
     state.greek_count = len(load_words(state.greek_file))
     state.english_count = len(load_words(state.english_file))
     state.results_count = len(load_words(state.results_file))
 
+
 def rgb_hex(rgb):
     return "#{:02x}{:02x}{:02x}".format(rgb[0], rgb[1], rgb[2])
+
 
 def _sync_meanings_cache(path, data):
     try:
         _meanings_cache[path] = {"mtime": os.path.getmtime(path), "data": data}
     except OSError:
         _meanings_cache[path] = {"mtime": 0, "data": data}
+
 
 def save_manual_translation(word, translation, language):
     path = (
@@ -894,6 +948,7 @@ def save_manual_translation(word, translation, language):
 
     return entry
 
+
 def save_manual_meaning(word, senses_input, language):
     """
     senses_input: list of up to MAX_SENSES (10) tuples
@@ -917,7 +972,9 @@ def save_manual_meaning(word, senses_input, language):
         if not definition:
             continue
         pos = str(pos or "").strip()
-        cleaned_examples = [str(ex).strip() for ex in (examples or []) if str(ex).strip()][:3]
+        cleaned_examples = [
+            str(ex).strip() for ex in (examples or []) if str(ex).strip()
+        ][:3]
         senses.append(
             {
                 "part_of_speech": pos,
@@ -948,11 +1005,13 @@ def save_manual_meaning(word, senses_input, language):
     state.results_cache_dirty = True
     return entry
 
+
 def add_exist_letter(letter: str):
     key = exist_key_for_input(letter, state.language)
     if key is None:
         return
     state.exist_letters[key] += 1
+
 
 def delete_exist_item_at(idx):
     """Delete the exist letter group at the given index."""
@@ -964,12 +1023,14 @@ def delete_exist_item_at(idx):
             state.selected_exist_idx, 0, max(len(state.exist_letters) - 1, 0)
         )
 
+
 def target_positions():
     return (
         range(state.word_length)
         if state.input_scope == "all"
         else (state.selected_pos,)
     )
+
 
 def toggle_letter(letter):
     targets = tokens_for_input(letter, state.language)
@@ -1003,6 +1064,7 @@ def toggle_letter(letter):
         if turned_on:
             hist.append(frozenset(targets))
 
+
 def backspace_letter_slot():
     """Removes only the most recently toggled-on letter/group from the
     targeted Valid/Invalid slot(s), leaving the rest of the slot intact.
@@ -1029,6 +1091,7 @@ def backspace_letter_slot():
             # rather than doing nothing.
             tgt.pop()
 
+
 def clear_letter_slot():
     """Fully clears the targeted Valid/Invalid slot(s) and their history."""
     for p in target_positions():
@@ -1041,6 +1104,7 @@ def clear_letter_slot():
             state.invalid_sets[p].clear()
             state.invalid_history[p].clear()
 
+
 def ph_target_slots():
     row, col = ph_cell_key()
     count = ph_cell_count(row, col)
@@ -1048,11 +1112,13 @@ def ph_target_slots():
         return list(range(count))
     return [ph_cell_selected_idx(row, col)]
 
+
 def ph_add_letter(ch):
     row, col = ph_cell_key()
     for idx in ph_target_slots():
         slot = ph_cell_slots(row, col)[idx]
         slot["seq"] += ch
+
 
 def ph_backspace():
     """Removes the last character of the sequence in the current Pattern
@@ -1065,6 +1131,7 @@ def ph_backspace():
             if not slot["seq"]:
                 slot["expanded"] = False
 
+
 def ph_clear_slot():
     """Fully clears the current Pattern Hunt slot(s) in one action."""
     row, col = ph_cell_key()
@@ -1073,12 +1140,14 @@ def ph_clear_slot():
         slot["seq"] = ""
         slot["expanded"] = False
 
+
 def ph_toggle_expand():
     row, col = ph_cell_key()
     for idx in ph_target_slots():
         slot = ph_cell_slots(row, col)[idx]
         if slot["seq"]:
             slot["expanded"] = not slot["expanded"]
+
 
 def do_search():
     try:
@@ -1134,6 +1203,7 @@ def do_search():
     )
     search_job.start()
 
+
 def do_save():
     # Determine what to save
     to_save_words = []
@@ -1161,6 +1231,7 @@ def do_save():
     except Exception as e:
         state.status = f"Save error: {e}"
 
+
 def get_target_words():
     """
     Target words for Save / Translation / Meaning.
@@ -1184,6 +1255,7 @@ def get_target_words():
     excluded = {w for w, v in state.word_selections.items() if v == "exclude"}
     return [w for w in state.search_results if w not in excluded]
 
+
 def do_translate_action():
     """kicks off a background EnrichmentJob that translates the
     target words and saves results into the correct JSON file, showing
@@ -1197,6 +1269,7 @@ def do_translate_action():
     job = EnrichmentJob("translation", words, state.language)
     progress_modal.start(job, f"Translating {len(words)} word(s)…")
 
+
 def do_get_meaning_action():
     """kicks off a background EnrichmentJob that fetches meanings
     (WordNet senses for English; Greek words only get their translation
@@ -1209,6 +1282,7 @@ def do_get_meaning_action():
         return
     job = EnrichmentJob("meaning", words, state.language)
     progress_modal.start(job, f"Getting meaning for {len(words)} word(s)…")
+
 
 def _get_cached_json(path):
     if not path or not os.path.exists(path):
@@ -1224,6 +1298,7 @@ def _get_cached_json(path):
     _meanings_cache[path] = {"mtime": mtime, "data": data}
     return data
 
+
 def lookup_word_entry(word, language):
     """Returns the raw JSON entry dict for `word` in the given source
     language ('greek' or 'english'), or None if not found."""
@@ -1234,6 +1309,7 @@ def lookup_word_entry(word, language):
     )
     data = _get_cached_json(path)
     return data.get(normalize_word(word))
+
 
 def format_meaning_lines(entry, language):
     lines = []
@@ -1270,9 +1346,11 @@ def format_meaning_lines(entry, language):
 
     return lines
 
+
 def get_word_status(word, language):
     entry = lookup_word_entry(word, language)
     return (entry or {}).get("status", "no_translation_no_meaning")
+
 
 def send_words_to_results(words):
     """Transfers the given word list into the results panel, replacing the
@@ -1284,6 +1362,7 @@ def send_words_to_results(words):
     state.preview_start = 0
     state.results_cache_dirty = True
     state.status = f"Sent {len(state.search_results)} word(s) to results"
+
 
 def rebuild_results_cache():
     counts = Counter({k: 0 for k in STATUS_KEYS})
@@ -1298,41 +1377,46 @@ def rebuild_results_cache():
     state.results_status_map = status_map
     state.results_status_counts = counts
     state.results_visible_words = [
-        w for w in state.search_results
+        w
+        for w in state.search_results
         if (
             status_map.get(w) in state.status_filters
-            or (
-                state.word_selections.get(w) == "save"
-                and "selected" in state.selection_filters
+            and (
+                state.word_selections.get(w) != "save"
+                or "selected" in state.selection_filters
             )
-            or (
-                state.word_selections.get(w) == "exclude"
-                and "excluded" in state.selection_filters
+            and (
+                state.word_selections.get(w) != "exclude"
+                or "excluded" in state.selection_filters
             )
         )
     ]
     state.results_cache_dirty = False
 
+
 def refresh_visible_results():
     state.results_visible_words = [
-        w for w in state.search_results
+        w
+        for w in state.search_results
         if (
             state.results_status_map.get(w) in state.status_filters
-            or (
-                state.word_selections.get(w) == "save"
-                and "selected" in state.selection_filters
+            and (
+                state.word_selections.get(w) != "save"
+                or "selected" in state.selection_filters
             )
-            or (
-                state.word_selections.get(w) == "exclude"
-                and "excluded" in state.selection_filters
+            and (
+                state.word_selections.get(w) != "exclude"
+                or "excluded" in state.selection_filters
             )
         )
     ]
+
 
 def _display_alphabet(language: str):
     if language == "greek":
         return [group[0].upper() for group in GREEK_GROUPS]
     return [ch.upper() for ch in ENGLISH_LETTERS]
+
 
 def _base_letter(ch: str, language: str):
     if not ch or not ch.isalpha():
@@ -1341,8 +1425,10 @@ def _base_letter(ch: str, language: str):
         return GREEK_CHAR_TO_FIRST.get(ch, ch).upper()
     return ch.upper()
 
+
 def _word_letters(word: str, language: str):
     return [_base_letter(ch, language) for ch in word if _base_letter(ch, language)]
+
 
 def _is_vowel(ch: str, language: str):
     if not ch:
@@ -1350,6 +1436,7 @@ def _is_vowel(ch: str, language: str):
     if language == "greek":
         return ch in {"Α", "Ε", "Η", "Ι", "Ο", "Υ", "Ω"}
     return ch in {"A", "E", "I", "O", "U", "Y"}
+
 
 def _count_vowel_groups(word: str, language: str):
     letters = _word_letters(word, language)
@@ -1368,9 +1455,11 @@ def _count_vowel_groups(word: str, language: str):
         groups -= 1
     return max(groups, 1)
 
+
 def _estimate_syllables(word: str, language: str):
     # Simple vowel-group heuristic with a light English silent-E adjustment.
     return _count_vowel_groups(word, language)
+
 
 def _stats_summary(values):
     if not values:
@@ -1379,8 +1468,10 @@ def _stats_summary(values):
         return (values[0], values[0], 0)
     return (mean(values), median(values), pstdev(values))
 
+
 def _bucket_label(start_frac, end_frac):
     return f"{int(start_frac * 100)}–{int(end_frac * 100)}%"
+
 
 def _top_ngrams(words, language, n=2, top_n=15):
     counter = Counter()
@@ -1391,6 +1482,7 @@ def _top_ngrams(words, language, n=2, top_n=15):
             counter[seq] += 1
     return counter.most_common(top_n)
 
+
 def get_word_translation(word, language):
     """Returns a short translation string for the hover tooltip, or None."""
     entry = lookup_word_entry(word, language)
@@ -1400,6 +1492,7 @@ def get_word_translation(word, language):
         return entry.get("greek_translation")
     else:
         return entry.get("english_translation")
+
 
 def get_word_first_definition(word, language):
     """Returns only the first saved sense's definition text for `word`,
@@ -1413,6 +1506,7 @@ def get_word_first_definition(word, language):
         return None
     definition = senses[0].get("definition", "")
     return definition or None
+
 
 def format_progress_result_lines(job_kind, entry, language):
     """
@@ -1439,6 +1533,7 @@ def format_progress_result_lines(job_kind, entry, language):
         lines.append(f"Translation {special_chars['-']} {translation}")
     lines.extend(format_meaning_lines(entry, language))
     return lines
+
 
 def toggle_finder_mode():
     if state.finder_mode == "letter_match":

@@ -13,13 +13,19 @@ import wf_constants as C
 import wf_state as S
 from wf_constants import FONT_DEFAULT, FONT_SM, FONT_MD, PAD, special_chars
 from wf_search import exist_key_for_input
+
 # NOTE: _make_pattern_slot lives in wf_state.py (it's a plain data-shape factory
 # for AppState's pattern slots, not a drawing primitive) to avoid a circular
 # import between wf_ui_helpers and wf_state.
 from wf_state import (
-    add_exist_letter, delete_exist_item_at, toggle_letter,
-    backspace_letter_slot, clear_letter_slot,
-    ph_add_letter, ph_backspace, ph_clear_slot,
+    add_exist_letter,
+    delete_exist_item_at,
+    toggle_letter,
+    backspace_letter_slot,
+    clear_letter_slot,
+    ph_add_letter,
+    ph_backspace,
+    ph_clear_slot,
     _results_keyboard_rects,
 )
 from wf_state import clamp
@@ -37,12 +43,14 @@ def add_absent_letter(letter: str):
     else:
         S.state.absent_letters.append(key)
 
+
 def delete_absent_item_at(idx):
     if 0 <= idx < len(S.state.absent_letters):
         del S.state.absent_letters[idx]
         S.state.selected_absent_idx = clamp(
             S.state.selected_absent_idx, 0, max(len(S.state.absent_letters) - 1, 0)
         )
+
 
 def handle_text_input(ch: str):
     if not ch or not ch.isalpha():
@@ -56,6 +64,7 @@ def handle_text_input(ch: str):
             add_absent_letter(ch)
     else:
         ph_add_letter(ch)
+
 
 def handle_backspace_input():
     """Backspace: removes one letter/character at a time (does not clear
@@ -71,6 +80,7 @@ def handle_backspace_input():
     else:
         ph_backspace()
 
+
 def handle_delete_input():
     """Delete: fully clears the targeted slot(s) in one action, for both
     finder modes."""
@@ -83,6 +93,7 @@ def handle_delete_input():
             clear_letter_slot()
     else:
         ph_clear_slot()
+
 
 def greek_tone_variant(ch: str, tone_state: int):
     """
@@ -123,12 +134,14 @@ def greek_tone_variant(ch: str, tone_state: int):
 
     return ch
 
+
 def keyboard_char_for(base: str):
     if S.state.language == "english":
         return base.upper() if S.state.keyboard_caps else base.lower()
 
     ch = base.upper() if S.state.keyboard_caps else base.lower()
     return greek_tone_variant(ch, S.state.keyboard_tone)
+
 
 def _keyboard_rows():
     if S.state.language == "english":
@@ -142,6 +155,7 @@ def _keyboard_rows():
         ["α", "σ", "δ", "φ", "γ", "η", "ξ", "κ", "λ"],
         ["ζ", "χ", "ψ", "ω", "β", "ν", "μ"],
     ]
+
 
 def draw_virtual_keyboard(surface, panel, mouse_pos):
     kb_h = 120
@@ -185,61 +199,36 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
     tone_w = 80
 
     # Row 1 available width for letters
-    row1_available = (
-        kb_rect.width
-        - 16
-        - backspace_w
-        - key_gap
-    )
+    row1_available = kb_rect.width - 16 - backspace_w - key_gap
 
-    row1_letter_w = (
-        row1_available - (len(row1) - 1) * key_gap
-    ) // len(row1)
+    row1_letter_w = (row1_available - (len(row1) - 1) * key_gap) // len(row1)
 
     # Row 2 available width for letters
-    row2_available = (
-        kb_rect.width
-        - 16
-        - caps_w
-        - tone_w
-        - 2 * key_gap
-    )
+    row2_available = kb_rect.width - 16 - caps_w - tone_w - 2 * key_gap
 
-    row2_letter_w = (
-        row2_available - (len(row2) - 1) * key_gap
-    ) // len(row2)
+    row2_letter_w = (row2_available - (len(row2) - 1) * key_gap) // len(row2)
 
     # Row 3 is split around the language button
     lang_left = kb_rect.centerx - lang_btn_w // 2
     lang_right = kb_rect.centerx + lang_btn_w // 2
 
-    row3_left_available = (
-        lang_left
-        - (kb_rect.x + 8)
-        - key_gap
-    )
+    row3_left_available = lang_left - (kb_rect.x + 8) - key_gap
 
-    row3_right_available = (
-        (kb_rect.right - 8)
-        - lang_right
-        - key_gap
-    )
+    row3_right_available = (kb_rect.right - 8) - lang_right - key_gap
 
-    left_keys = row3[:len(row3) // 2 + 1]
-    right_keys = row3[len(row3) // 2 + 1:]
+    left_keys = row3[: len(row3) // 2 + 1]
+    right_keys = row3[len(row3) // 2 + 1 :]
 
     if left_keys:
         row3_left_letter_w = (
-            row3_left_available
-            - (len(left_keys) - 1) * key_gap
+            row3_left_available - (len(left_keys) - 1) * key_gap
         ) // len(left_keys)
     else:
         row3_left_letter_w = row1_letter_w
 
     if right_keys:
         row3_right_letter_w = (
-            row3_right_available
-            - (len(right_keys) - 1) * key_gap
+            row3_right_available - (len(right_keys) - 1) * key_gap
         ) // len(right_keys)
     else:
         row3_right_letter_w = row1_letter_w
@@ -458,6 +447,7 @@ def draw_virtual_keyboard(surface, panel, mouse_pos):
 
     return kb_rect.top
 
+
 def fit_text_with_ellipsis(text, font, max_width):
     if font.size(text)[0] <= max_width:
         return text
@@ -474,6 +464,7 @@ def fit_text_with_ellipsis(text, font, max_width):
             hi = mid - 1
     return text[:lo] + ell
 
+
 def blit_text(surface, text, font, color, x, y, anchor="topleft"):
     img = font.render(text, True, color)
     r = img.get_rect()
@@ -481,22 +472,24 @@ def blit_text(surface, text, font, color, x, y, anchor="topleft"):
     surface.blit(img, r)
     return r
 
+
 def draw_panel(surface, rect, color=None, border_color=None, radius=12):
     c = color if color is not None else C.PANEL
     b = border_color if border_color is not None else C.BORDER
     pygame.draw.rect(surface, c, rect, border_radius=radius)
     pygame.draw.rect(surface, b, rect, 1, border_radius=radius)
 
+
 def lighten(color, amount=35):
     return tuple(min(255, c + amount) for c in color[:3])
+
 
 def _dim_color(color, toward=None, factor=0.45):
     """Blends `color` toward a muted/background tone, used to de-emphasize
     non-hovered chart bars relative to the hovered one."""
     target = toward if toward is not None else C.PANEL2
-    return tuple(
-        int(c + (t - c) * factor) for c, t in zip(color[:3], target[:3])
-    )
+    return tuple(int(c + (t - c) * factor) for c, t in zip(color[:3], target[:3]))
+
 
 def draw_button(
     surface, rect, label, bg=None, fg=None, radius=8, hovered=False, font=None
@@ -511,6 +504,7 @@ def draw_button(
     pygame.draw.rect(surface, fill, draw_rect, border_radius=radius)
     img = font.render(label, True, fg)
     surface.blit(img, img.get_rect(center=draw_rect.center))
+
 
 def draw_nav_button(
     surface, rect, direction="left", color=None, hovered=False, enabled=True
@@ -530,6 +524,7 @@ def draw_nav_button(
     else:
         points = [(cx - s * 0.6, cy - s), (cx - s * 0.6, cy + s), (cx + s * 0.7, cy)]
     pygame.draw.polygon(surface, fg, points)
+
 
 def draw_pill_toggle(
     surface, rect, labels, active_idx, colors=None, hovered=False, mouse_pos=None
@@ -560,6 +555,7 @@ def draw_pill_toggle(
         surface.blit(img, img.get_rect(center=sr.center))
         rects.append(sr)
     return rects
+
 
 def draw_slider(
     surface, x, y, w, min_v, max_v, value, label, show_all_marker=False, is_all=False

@@ -11,7 +11,9 @@ from itertools import product
 from collections import Counter
 
 from wf_constants import (
-    ENGLISH_GROUP_BY_FIRST, GREEK_GROUP_BY_FIRST, GREEK_CHAR_TO_FIRST,
+    ENGLISH_GROUP_BY_FIRST,
+    GREEK_GROUP_BY_FIRST,
+    GREEK_CHAR_TO_FIRST,
 )
 
 
@@ -25,6 +27,7 @@ def load_words(file_path: str):
         except UnicodeDecodeError:
             pass
     raise UnicodeDecodeError("Could not decode file with common encodings")
+
 
 def find_matching_words(
     words_list, word_length, valid_sets, invalid_sets, exist_letters, language
@@ -61,6 +64,7 @@ def find_matching_words(
             results.append(word)
     return results
 
+
 def _pat_matches_start(word, pat_info, language):
     """Return True if pat_info matches the start of word."""
     seq = pat_info["seq"]
@@ -84,6 +88,7 @@ def _pat_matches_start(word, pat_info, language):
         return True
     else:
         return word.startswith(seq)
+
 
 def _pat_matches_end(word, pat_info, language):
     """Return True if pat_info matches the end of word."""
@@ -109,6 +114,7 @@ def _pat_matches_end(word, pat_info, language):
         return True
     else:
         return word.endswith(seq)
+
 
 def _pat_matches_inner(word, pat_info, language):
     """Return True if pat_info appears anywhere in the whole word."""
@@ -140,6 +146,7 @@ def _pat_matches_inner(word, pat_info, language):
             if chunk == seq:
                 return True
     return False
+
 
 def _pat_matches_middle(word, pat_info, language):
     """Return True if pat_info matches strictly inside word, excluding the
@@ -183,6 +190,7 @@ def _pat_matches_middle(word, pat_info, language):
 
     return seq in interior
 
+
 def _pat_matches_row(word, pat_info, row_name, language):
     if row_name == "start":
         return _pat_matches_start(word, pat_info, language)
@@ -191,6 +199,7 @@ def _pat_matches_row(word, pat_info, row_name, language):
     if row_name == "middle":
         return _pat_matches_middle(word, pat_info, language)
     return _pat_matches_end(word, pat_info, language)
+
 
 def expand_sequence(seq, language):
     """Convert a sequence like 'οσαστ' into 'οόΟΌσΣςαάΑΆσΣςτΤ'.
@@ -221,6 +230,7 @@ def expand_sequence(seq, language):
     # Actually we want: for 'σσ' -> 'ΣσςΣσς', for 'σ' -> 'Σσς'.
     # The simple approach: just return all of them without any dedup.
     return "".join(result)
+
 
 def _exist_variants(pat_info):
     """
@@ -271,6 +281,7 @@ def _exist_variants(pat_info):
 
     return ["".join(chars) for chars in product(*groups)]
 
+
 def _check_start_exist(word, exist_pats):
     if not exist_pats:
         return True
@@ -305,6 +316,7 @@ def _check_start_exist(word, exist_pats):
             return False
 
     return any(word.startswith(v) for v in _exist_variants(longest_pat))
+
 
 def _check_end_exist(word, exist_pats):
     if not exist_pats:
@@ -341,10 +353,11 @@ def _check_end_exist(word, exist_pats):
 
     return any(word.endswith(v) for v in _exist_variants(longest_pat))
 
+
 def _check_inner_exist(word, exist_pats):
     if not exist_pats:
         return True
-    
+
     interior = word
     if not interior:
         return False
@@ -366,11 +379,12 @@ def _check_inner_exist(word, exist_pats):
 
     return True
 
+
 def _check_middle_exist(word, exist_pats):
     if not exist_pats:
         return True
 
-    interior = word[1 : -1]
+    interior = word[1:-1]
     if not interior:
         return False
 
@@ -390,6 +404,7 @@ def _check_middle_exist(word, exist_pats):
             return False
 
     return True
+
 
 def find_pattern_words_grid(
     words_list, word_length, slots_by_cell, counts_by_cell, language
@@ -487,6 +502,7 @@ def find_pattern_words_grid(
             results.append(word)
 
     return results
+
 
 def exist_key_for_input(letter: str, language: str):
     if not letter:

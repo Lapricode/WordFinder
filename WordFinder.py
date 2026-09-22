@@ -23,32 +23,56 @@ import wf_modals
 from wf_constants import clock
 from wf_state import (
     state,
-    do_search, do_save,
-    open_file_dialog, open_text_file, save_file_dialog,
-    ph_adjust_cell_count, ph_cell_selected_idx, ph_set_cell_selected_idx, ph_toggle_expand,
+    do_search,
+    do_save,
+    open_file_dialog,
+    open_text_file,
+    save_file_dialog,
+    ph_adjust_cell_count,
+    ph_cell_selected_idx,
+    ph_set_cell_selected_idx,
+    ph_toggle_expand,
     poll_search_job,
-    refresh_summary_window, refresh_visible_results, refresh_words_counts,
+    refresh_summary_window,
+    refresh_visible_results,
+    refresh_words_counts,
     toggle_finder_mode,
 )
 from wf_constants import (
-    clamp, set_theme,
-    MAX_WORD_LENGTH, MAX_MAX_PREVIEW, MIN_RESULTS_PER_ROW, MAX_RESULTS_PER_ROW,
-    PH_ROWS, PH_COLS,
+    clamp,
+    set_theme,
+    MAX_WORD_LENGTH,
+    MAX_MAX_PREVIEW,
+    MIN_RESULTS_PER_ROW,
+    MAX_RESULTS_PER_ROW,
+    PH_ROWS,
+    PH_COLS,
 )
 from wf_ui_helpers import (
-    handle_text_input, handle_backspace_input, handle_delete_input,
+    handle_text_input,
+    handle_backspace_input,
+    handle_delete_input,
     keyboard_char_for,
 )
 from wf_modals import (
-    InfoModal, ProgressModal, EnrichmentModal, ShowWordsModal, AddWordsModal,
-    DeleteWordsModal, ShowStatisticsModal, SummaryModal,
+    InfoModal,
+    ProgressModal,
+    EnrichmentModal,
+    ShowWordsModal,
+    AddWordsModal,
+    DeleteWordsModal,
+    ShowStatisticsModal,
+    SummaryModal,
 )
 import wf_render as R
 from wf_render import (
-    render_header, render_controls, render_file_row,
-    render_workspace_lm, render_workspace_ph, render_results,
+    render_header,
+    render_controls,
+    render_file_row,
+    render_workspace_lm,
+    render_workspace_ph,
+    render_results,
 )
-
 
 if __name__ == "__main__":
     refresh_words_counts()
@@ -155,7 +179,9 @@ if __name__ == "__main__":
 
             elif event.type == pygame.VIDEORESIZE:
                 C.WIDTH, C.HEIGHT = event.w, event.h
-                C.screen = pygame.display.set_mode((C.WIDTH, C.HEIGHT), pygame.RESIZABLE)
+                C.screen = pygame.display.set_mode(
+                    (C.WIDTH, C.HEIGHT), pygame.RESIZABLE
+                )
 
             # Let the enrichment modal get first crack at clicks/keys.
             if enrichment_modal.visible and enrichment_modal.handle_event(
@@ -173,19 +199,27 @@ if __name__ == "__main__":
             if modal_was_open:
                 continue
 
-            if words_modal.visible and words_modal.handle_event(event, C.WIDTH, C.HEIGHT):
+            if words_modal.visible and words_modal.handle_event(
+                event, C.WIDTH, C.HEIGHT
+            ):
                 continue
 
             if add_modal.visible and add_modal.handle_event(event, C.WIDTH, C.HEIGHT):
                 continue
 
-            if delete_modal.visible and delete_modal.handle_event(event, C.WIDTH, C.HEIGHT):
+            if delete_modal.visible and delete_modal.handle_event(
+                event, C.WIDTH, C.HEIGHT
+            ):
                 continue
 
-            if stats_modal.visible and stats_modal.handle_event(event, C.WIDTH, C.HEIGHT):
+            if stats_modal.visible and stats_modal.handle_event(
+                event, C.WIDTH, C.HEIGHT
+            ):
                 continue
 
-            if summary_modal.visible and summary_modal.handle_event(event, C.WIDTH, C.HEIGHT):
+            if summary_modal.visible and summary_modal.handle_event(
+                event, C.WIDTH, C.HEIGHT
+            ):
                 continue
 
             if event.type == pygame.MOUSEBUTTONDOWN:
@@ -202,7 +236,9 @@ if __name__ == "__main__":
                     # Results words-per-row controls
                     elif R._results_action_rects.get(
                         "per_row_minus"
-                    ) is not None and R._results_action_rects["per_row_minus"].collidepoint(
+                    ) is not None and R._results_action_rects[
+                        "per_row_minus"
+                    ].collidepoint(
                         mx, my
                     ):
                         state.results_per_row = clamp(
@@ -212,7 +248,9 @@ if __name__ == "__main__":
                         )
                     elif R._results_action_rects.get(
                         "per_row_plus"
-                    ) is not None and R._results_action_rects["per_row_plus"].collidepoint(
+                    ) is not None and R._results_action_rects[
+                        "per_row_plus"
+                    ].collidepoint(
                         mx, my
                     ):
                         state.results_per_row = clamp(
@@ -255,13 +293,21 @@ if __name__ == "__main__":
                             summary_modal.show(state.finder_mode)
 
                     # PH column toggle (Valid/Invalid/Exist row under Start/Middle/End)
-                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[0].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "valid"
-                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[1].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "invalid"
-                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[2].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "exist"
-                    elif ph_col_rects is not None and ph_col_rects[3].collidepoint(mx, my):
+                    elif ph_col_rects is not None and ph_col_rects[3].collidepoint(
+                        mx, my
+                    ):
                         state.ph_col = "absent"
 
                     # Translate / Meaning checkboxes
@@ -432,7 +478,9 @@ if __name__ == "__main__":
                             # ABSENT row
                             if not clicked:
                                 absent_row = lm_ui.get("absent_row")
-                                if absent_row is not None and absent_row.collidepoint(mx, my):
+                                if absent_row is not None and absent_row.collidepoint(
+                                    mx, my
+                                ):
                                     state.input_mode = "absent"
                                     clicked = True
 
@@ -465,25 +513,42 @@ if __name__ == "__main__":
                                 if clicked_ph:
                                     break
 
-                        if state.keyboard_on and S._results_keyboard_rects.get("panel") is not None:
+                        if (
+                            state.keyboard_on
+                            and S._results_keyboard_rects.get("panel") is not None
+                        ):
                             kp = S._results_keyboard_rects["panel"]
                             if kp.collidepoint(mx, my):
                                 controls = S._results_keyboard_rects.get("controls", {})
-                                if controls.get("lang") and controls["lang"].collidepoint(mx, my):
-                                    state.language = "english" if state.language == "greek" else "greek"
+                                if controls.get("lang") and controls[
+                                    "lang"
+                                ].collidepoint(mx, my):
+                                    state.language = (
+                                        "english"
+                                        if state.language == "greek"
+                                        else "greek"
+                                    )
                                     state.status = f"Language: {state.language.title()}"
                                     state.results_cache_dirty = True
                                     break
-                                if controls.get("caps") and controls["caps"].collidepoint(mx, my):
+                                if controls.get("caps") and controls[
+                                    "caps"
+                                ].collidepoint(mx, my):
                                     state.keyboard_caps = not state.keyboard_caps
                                     break
-                                if controls.get("tone") and controls["tone"].collidepoint(mx, my):
+                                if controls.get("tone") and controls[
+                                    "tone"
+                                ].collidepoint(mx, my):
                                     state.keyboard_tone = (state.keyboard_tone + 1) % 4
                                     break
-                                if controls.get("backspace") and controls["backspace"].collidepoint(mx, my):
+                                if controls.get("backspace") and controls[
+                                    "backspace"
+                                ].collidepoint(mx, my):
                                     handle_backspace_input()
                                     break
-                                for base, r in S._results_keyboard_rects.get("keys", []):
+                                for base, r in S._results_keyboard_rects.get(
+                                    "keys", []
+                                ):
                                     if r.collidepoint(mx, my):
                                         handle_text_input(keyboard_char_for(base))
                                         break
@@ -499,19 +564,45 @@ if __name__ == "__main__":
                                 break
 
                         # Results action buttons
-                        if R._results_action_rects.get("keyboard") is not None and R._results_action_rects["keyboard"].collidepoint(mx, my):
+                        if R._results_action_rects.get(
+                            "keyboard"
+                        ) is not None and R._results_action_rects[
+                            "keyboard"
+                        ].collidepoint(
+                            mx, my
+                        ):
                             state.keyboard_on = not state.keyboard_on
                             break
 
-                        if R._results_action_rects.get("show_words") is not None and R._results_action_rects["show_words"].collidepoint(mx, my):
-                            words_modal.show(state.results_visible_words, state.language)
+                        if R._results_action_rects.get(
+                            "show_words"
+                        ) is not None and R._results_action_rects[
+                            "show_words"
+                        ].collidepoint(
+                            mx, my
+                        ):
+                            words_modal.show(
+                                state.results_visible_words, state.language
+                            )
                             break
 
-                        if R._results_action_rects.get("show_stats") is not None and R._results_action_rects["show_stats"].collidepoint(mx, my):
-                            stats_modal.show(state.results_visible_words, state.language)
+                        if R._results_action_rects.get(
+                            "show_stats"
+                        ) is not None and R._results_action_rects[
+                            "show_stats"
+                        ].collidepoint(
+                            mx, my
+                        ):
+                            stats_modal.show(
+                                state.results_visible_words, state.language
+                            )
                             break
 
-                        if R._results_action_rects.get("color") is not None and R._results_action_rects["color"].collidepoint(mx, my):
+                        if R._results_action_rects.get(
+                            "color"
+                        ) is not None and R._results_action_rects["color"].collidepoint(
+                            mx, my
+                        ):
                             state.colorize_status = not state.colorize_status
                             break
 
@@ -629,7 +720,7 @@ if __name__ == "__main__":
                             if letters:
                                 state.selected_absent_idx = (
                                     state.selected_absent_idx - 1
-                                ) % len(letters)                        
+                                ) % len(letters)
                         else:
                             if state.word_length > 0:
                                 state.selected_pos = (
@@ -658,7 +749,7 @@ if __name__ == "__main__":
                             if letters:
                                 state.selected_absent_idx = (
                                     state.selected_absent_idx + 1
-                                ) % len(letters)                        
+                                ) % len(letters)
                         else:
                             if state.word_length > 0:
                                 state.selected_pos = (
